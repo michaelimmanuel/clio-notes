@@ -287,7 +287,8 @@ impl SettingsStore {
     /// Missing file means no profiles yet.
     pub fn load(&self) -> Result<Settings> {
         match std::fs::read_to_string(&self.path) {
-            Ok(text) => serde_json::from_str(&text).map_err(|e| {
+            // Notepad and Windows PowerShell save UTF-8 with a byte-order mark.
+            Ok(text) => serde_json::from_str(text.trim_start_matches('\u{feff}')).map_err(|e| {
                 ProviderError::config(format!("{} is not valid: {e}", self.path.display()))
             }),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Settings::default()),
@@ -412,6 +413,8 @@ mod tests {
         assert_eq!(store.load().unwrap(), s);
         let text = std::fs::read_to_string(store.path()).unwrap();
         assert!(!text.contains("key"), "settings file must not hold keys");
+        std::fs::write(store.path(), format!("\u{feff}{text}")).unwrap();
+        assert_eq!(store.load().unwrap(), s, "a byte-order mark must not break loading");
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

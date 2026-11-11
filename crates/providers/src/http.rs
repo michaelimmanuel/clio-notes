@@ -108,11 +108,24 @@ pub(crate) fn classify(status: u16, headers: &HeaderMap, body: &str, model: &str
         Some(m) if !m.is_empty() => m.to_string(),
         _ => snippet(body),
     };
-    let detail = if message.is_empty() {
+    let mut detail = if message.is_empty() {
         format!("HTTP {status}")
     } else {
         message.clone()
     };
+    // OpenRouter wraps upstream failures as "Provider returned 403" and puts
+    // the upstream provider and its own error text in `error.metadata`.
+    let metadata = &error["metadata"];
+    if let Some(provider) = metadata["provider_name"].as_str() {
+        detail.push_str(&format!(" by {provider}"));
+    }
+    if let Some(raw) = metadata["raw"].as_str().filter(|r| !r.is_empty()) {
+        let raw_message = serde_json::from_str::<Value>(raw)
+            .ok()
+            .and_then(|v| v["error"]["message"].as_str().map(str::to_string))
+            .unwrap_or_else(|| snippet(raw));
+        detail.push_str(&format!(": {raw_message}"));
+    }
     let has = |s: &str| kind == s || code == s;
     let lower = message.to_lowercase();
 
@@ -230,6 +243,17 @@ mod tests {
                 status: 502,
                 detail: "<html>Bad gateway</html>".into()
             }
+        );
+    }
+
+    #[test]
+    fn openrouter_upstream_error_detail_is_kept() {
+        let body = r#"{"error":{"code":403,"message":"Provider returned 403","metadata":{"provider_name":"OpenAI","raw":"{\"error\":{\"message\":\"Region not supported\"}}"}}}"#;
+        let e = classify_body(403, body);
+        assert!(
+            e.to_string()
+                .contains("Provider returned 403 by OpenAI: Region not supported"),
+            "{e}"
         );
     }
 

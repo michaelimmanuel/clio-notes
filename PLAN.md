@@ -187,7 +187,7 @@ notes, and a new user can go from install to first notes without help.
 ## After v1
 
 1. Indonesian and mixed English–Indonesian speech (new speech adapter, benchmark on real recordings)
-2. Telling remote speakers apart
+2. Telling remote speakers apart (see "Feature: speaker identification" below)
 3. Local speech model option (`whisper-rs`)
 4. Ask questions about past meetings
 5. HTML and PDF export
@@ -202,3 +202,39 @@ notes, and a new user can go from install to first notes without help.
 | Notes state things nobody said or showed | Spoken/screen marking and the M4 reading test |
 | Providers differ in streaming and structured-output behaviour | Capability model, own schema validation, chunked fallback adapter |
 | Recording without participants knowing | Indicator and consent reminder (M6); the user stays responsible |
+
+## Feature: speaker identification
+
+Label each remote participant separately, by name where possible, instead of one "Others"
+label. Planned for after v1.
+
+**Today (v1):** "Me" comes from the microphone and "Others" from system audio. This is reliable
+because it uses the source of the audio, not voice recognition. Every remote participant arrives
+mixed into the one system-audio stream, so they cannot be told apart this way.
+
+**Ways to separate remote speakers:**
+
+| Approach | Gives | Trade-offs |
+|---|---|---|
+| Speech provider with diarization | "Speaker 1", "Speaker 2" with the transcript | Depends on the provider; short clips are unreliable, so it usually needs streaming or longer audio |
+| Local diarization model | "Speaker 1", "Speaker 2" for any speech provider | Extra setup and CPU use on the user's machine |
+| Read the meeting app's active-speaker highlight from the screen | Real names (Zoom, Teams and Meet show who is talking) | Only works when the gallery or speaker view is visible, not during screen sharing |
+
+**Proposed design:**
+
+- Diarization groups the system-audio stream by voice into anonymous speakers.
+- When the meeting app's speaker view is on screen, the screen pipeline reads the highlighted
+  name and links it to the anonymous speaker talking at that moment.
+- Speakers not named this way can be renamed by the user after the meeting; a rename applies to
+  the whole meeting.
+- Notes say "Speaker 2" rather than guessing a name when the link is uncertain.
+
+**Groundwork before then:**
+
+- When choosing the native streaming speech provider in M2, prefer one that supports
+  diarization, so adding this feature does not require switching providers.
+- Keep a speaker field on transcript events in the timeline from M2 on ("Me" / "Others" for now),
+  so labelled speakers fit without a schema change.
+
+**Exit check:** on a recorded call with at least three remote participants, at least 90% of
+transcript lines are given the right speaker, and every named speaker's name is correct.
