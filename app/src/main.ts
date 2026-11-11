@@ -558,6 +558,20 @@ async function autoAssign(p: Profile) {
 
 window.addEventListener("DOMContentLoaded", async () => {
   $("add-profile").addEventListener("click", () => openForm());
+  // `npm run dev` serves this page to a normal browser, where the Rust side
+  // does not exist. Say so instead of failing on the first command.
+  if (!("__TAURI_INTERNALS__" in window)) {
+    ($("add-profile") as HTMLButtonElement).disabled = true;
+    $("profiles").replaceChildren(
+      h(
+        "div",
+        { class: "result err" },
+        "This page only works inside the Clio Notes app window, not in a web browser. " +
+          "Stop this server, then run `npm run tauri dev` in the app folder.",
+      ),
+    );
+    return;
+  }
   try {
     settings = await invoke<SettingsView>("get_settings");
     render();
