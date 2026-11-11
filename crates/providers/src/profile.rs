@@ -20,6 +20,9 @@ pub enum ProviderKind {
     Anthropic,
     /// OpenAI or any service with an OpenAI-compatible API.
     OpenaiCompatible,
+    /// OpenRouter: one key for models from many providers, including
+    /// transcription models.
+    Openrouter,
 }
 
 impl ProviderKind {
@@ -27,6 +30,7 @@ impl ProviderKind {
         match self {
             ProviderKind::Anthropic => "Anthropic",
             ProviderKind::OpenaiCompatible => "OpenAI-compatible",
+            ProviderKind::Openrouter => "OpenRouter",
         }
     }
 }
@@ -38,8 +42,9 @@ impl std::str::FromStr for ProviderKind {
         match s.to_ascii_lowercase().replace('-', "_").as_str() {
             "anthropic" | "claude" => Ok(Self::Anthropic),
             "openai" | "openai_compatible" => Ok(Self::OpenaiCompatible),
+            "openrouter" => Ok(Self::Openrouter),
             other => Err(format!(
-                "unknown provider kind \"{other}\" (use anthropic or openai)"
+                "unknown provider kind \"{other}\" (use anthropic, openai or openrouter)"
             )),
         }
     }
@@ -77,7 +82,8 @@ impl Profile {
     }
 
     /// Whether this profile can be assigned to `role`. Anthropic's API does
-    /// not transcribe audio; an OpenAI-compatible endpoint may do anything.
+    /// not transcribe audio; OpenAI-compatible endpoints and OpenRouter may do
+    /// anything, depending on the model.
     pub fn supports(&self, role: Role) -> bool {
         !(self.kind == ProviderKind::Anthropic && role == Role::SpeechToText)
     }
@@ -86,12 +92,13 @@ impl Profile {
         self.base_url.as_deref().unwrap_or(match self.kind {
             ProviderKind::Anthropic => anthropic::DEFAULT_BASE_URL,
             ProviderKind::OpenaiCompatible => openai::DEFAULT_BASE_URL,
+            ProviderKind::Openrouter => openai::OPENROUTER_BASE_URL,
         })
     }
 
     /// Local servers (Ollama, LM Studio, a self-hosted Whisper) need no key.
     pub fn requires_key(&self) -> bool {
-        if self.kind == ProviderKind::Anthropic {
+        if self.kind != ProviderKind::OpenaiCompatible {
             return true;
         }
         let host = reqwest::Url::parse(self.base_url())
@@ -369,6 +376,15 @@ mod tests {
             s.upsert_profile(Profile::new("claude", ProviderKind::Anthropic, "m"))
                 .is_err()
         );
+    }
+
+    #[test]
+    fn openrouter_can_do_every_role_and_always_needs_a_key() {
+        let mut p = Profile::new("OR", ProviderKind::Openrouter, "openai/whisper-large-v3");
+        assert!(Role::ALL.iter().all(|r| p.supports(*r)));
+        assert_eq!(p.base_url(), "https://openrouter.ai/api/v1");
+        p.base_url = Some("http://localhost:8080/api/v1".into());
+        assert!(p.requires_key());
     }
 
     #[test]

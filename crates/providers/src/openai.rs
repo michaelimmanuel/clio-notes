@@ -2,6 +2,10 @@
 //! Groq, Gemini's compatible endpoint, Ollama, LM Studio and self-hosted
 //! Whisper servers. Covers chat completions (text and images) and audio
 //! transcription.
+//!
+//! OpenRouter gets its own [`Flavor`] because it differs in a few places: how
+//! a key is checked, how models are looked up, the vocabulary field for
+//! transcription, and errors returned inside successful responses.
 
 use async_trait::async_trait;
 use base64::Engine;
@@ -19,6 +23,16 @@ pub const DEFAULT_BASE_URL: &str = "https://api.openai.com/v1";
 /// OpenAI's current transcription model; the older ones (including
 /// `whisper-1`) are scheduled to shut down on 2027-02-26.
 pub const DEFAULT_TRANSCRIBE_MODEL: &str = "gpt-transcribe";
+pub const OPENROUTER_BASE_URL: &str = "https://openrouter.ai/api/v1";
+/// OpenRouter shows this name for the app's traffic in the user's activity log.
+const OPENROUTER_APP_TITLE: &str = "Clio Notes";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Flavor {
+    /// OpenAI itself, or a server that follows its API closely.
+    OpenAi,
+    OpenRouter,
+}
 
 #[derive(Clone)]
 pub struct OpenAiClient {
@@ -31,6 +45,7 @@ pub struct OpenAiClient {
     /// Send `max_tokens` instead of `max_completion_tokens`, for compatible
     /// servers that only know the older field.
     legacy_max_tokens: bool,
+    flavor: Flavor,
     pub(crate) retry: RetryPolicy,
 }
 
@@ -50,16 +65,37 @@ impl OpenAiClient {
             model: model.into(),
             effort,
             legacy_max_tokens,
+            flavor: Flavor::OpenAi,
             retry: RetryPolicy::default(),
         }
     }
 
-    fn request(&self, method: reqwest::Method, path: &str) -> reqwest::RequestBuilder {
-        let r = self.http.request(method, http::join(&self.base_url, path));
-        match &self.api_key {
-            Some(key) => r.bearer_auth(key),
-            None => r,
+    /// An OpenRouter client. `base_url` overrides the official endpoint.
+    pub fn openrouter(
+        http: reqwest::Client,
+        base_url: Option<&str>,
+        api_key: String,
+        model: impl Into<String>,
+        effort: Option<String>,
+    ) -> Self {
+        Self {
+            base_url: base_url.unwrap_or(OPENROUTER_BASE_URL).to_string(),
+            // OpenRouter documents `max_tokens` as the main field.
+            legacy_max_tokens: true,
+            flavor: Flavor::OpenRouter,
+            ..Self::new(http, None, Some(api_key), model, effort, false)
         }
+    }
+
+    fn request(&self, method: reqwest::Method, path: &str) -> reqwest::RequestBuilder {
+        let mut r = self.http.request(method, http::join(&self.base_url, path));
+        if let Some(key) = &self.api_key {
+            r = r.bearer_auth(key);
+        }
+        if self.flavor == Flavor::OpenRouter {
+            r = r.header("X-OpenRouter-Title", OPENROUTER_APP_TITLE);
+        }
+        r
     }
 
     pub(crate) fn chat_body(&self, req: &TextRequest) -> Value {
@@ -124,10 +160,15 @@ impl OpenAiClient {
         if let Some(lang) = &req.language {
             form = form.text("language", lang.clone());
         }
-        // Only gpt-transcribe takes a keyword list; elsewhere the terms go into
-        // the prompt, which every Whisper-style endpoint accepts.
+        // OpenRouter takes vocabulary as `keyterms[]` and ignores `prompt`.
+        // OpenAI's gpt-transcribe takes `keywords[]`. Elsewhere the terms go
+        // into the prompt, which every Whisper-style endpoint accepts.
         let mut prompt = req.prompt.clone();
-        if supports_keywords(&self.model) {
+        if self.flavor == Flavor::OpenRouter {
+            for k in &req.keywords {
+                form = form.text("keyterms[]", k.clone());
+            }
+        } else if supports_keywords(&self.model) {
             for k in &req.keywords {
                 form = form.text("keywords[]", k.clone());
             }
@@ -138,13 +179,16 @@ impl OpenAiClient {
                 None => vocab,
             });
         }
-        if let Some(p) = prompt {
+        if let Some(p) = prompt.filter(|_| self.flavor != Flavor::OpenRouter) {
             form = form.text("prompt", p);
         }
         Ok(form)
     }
 
     pub async fn check(&self) -> Result<CheckResult> {
+        if self.flavor == Flavor::OpenRouter {
+            return self.check_openrouter().await;
+        }
         let path = format!("models/{}", self.model);
         let v = http::send_json(self.retry, &self.model, || {
             self.request(reqwest::Method::GET, &path)
@@ -156,12 +200,47 @@ impl OpenAiClient {
         })
     }
 
+    /// OpenRouter lists models without a key, so the key is checked with
+    /// `GET /key`, then the model with `GET /models/{author}/{slug}/endpoints`.
+    async fn check_openrouter(&self) -> Result<CheckResult> {
+        http::send_json(self.retry, &self.model, || {
+            self.request(reqwest::Method::GET, "key")
+        })
+        .await?;
+        let path = format!("models/{}/endpoints", self.model);
+        let v = http::send_json(self.retry, &self.model, || {
+            self.request(reqwest::Method::GET, &path)
+        })
+        .await?;
+        Ok(CheckResult {
+            model: v["data"]["id"].as_str().unwrap_or(&self.model).to_string(),
+            display_name: v["data"]["name"].as_str().map(str::to_string),
+        })
+    }
+
     pub async fn list_models(&self) -> Result<Vec<String>> {
         let v = http::send_json(self.retry, &self.model, || {
             self.request(reqwest::Method::GET, "models")
         })
         .await?;
-        crate::anthropic::model_ids(&v)
+        let mut ids = crate::anthropic::model_ids(&v)?;
+        if self.flavor == Flavor::OpenRouter {
+            // Transcription models are listed separately. Missing them only
+            // makes the list shorter, so a failure here is not an error.
+            let speech = http::send_json(self.retry, &self.model, || {
+                self.request(
+                    reqwest::Method::GET,
+                    "models?output_modalities=transcription",
+                )
+            })
+            .await;
+            if let Ok(more) = speech.and_then(|v| crate::anthropic::model_ids(&v)) {
+                ids.extend(more);
+                ids.sort();
+                ids.dedup();
+            }
+        }
+        Ok(ids)
     }
 }
 
@@ -210,6 +289,16 @@ pub(crate) fn parse_chat(v: &Value, requested_model: &str) -> Result<TextRespons
     if choice.is_null() {
         return Err(ProviderError::invalid_response("no choices in response"));
     }
+    // OpenRouter can report an upstream failure inside an HTTP 200 response.
+    if let Some(code) = choice["error"]["code"].as_u64() {
+        let body = json!({ "error": choice["error"] }).to_string();
+        return Err(http::classify(
+            code as u16,
+            &reqwest::header::HeaderMap::new(),
+            &body,
+            requested_model,
+        ));
+    }
     let message = &choice["message"];
     if let Some(refusal) = message["refusal"].as_str() {
         return Err(ProviderError::Refused {
@@ -218,6 +307,12 @@ pub(crate) fn parse_chat(v: &Value, requested_model: &str) -> Result<TextRespons
     }
     match choice["finish_reason"].as_str() {
         Some("length") => return Err(ProviderError::Truncated),
+        Some("error") => {
+            return Err(ProviderError::Unavailable {
+                status: 502,
+                detail: "The upstream provider failed while generating.".into(),
+            });
+        }
         Some("content_filter") => {
             return Err(ProviderError::Refused {
                 detail: "The provider's content filter blocked the response.".into(),
@@ -470,5 +565,180 @@ mod tests {
         );
         assert_eq!(c.list_models().await.unwrap(), vec!["gemma", "llama3"]);
         m.assert_async().await;
+    }
+
+    // ---- OpenRouter ----
+
+    fn openrouter(server: &mockito::Server, model: &str) -> OpenAiClient {
+        let mut c = OpenAiClient::openrouter(
+            http::client(),
+            Some(&server.url()),
+            "sk-or-test".into(),
+            model,
+            None,
+        );
+        c.retry.base_delay = Duration::ZERO;
+        c
+    }
+
+    #[tokio::test]
+    async fn openrouter_check_validates_key_then_model() {
+        let mut server = mockito::Server::new_async().await;
+        let key = server
+            .mock("GET", "/key")
+            .match_header("authorization", "Bearer sk-or-test")
+            .match_header("x-openrouter-title", "Clio Notes")
+            .with_body(r#"{"data":{"label":"sk-or-...","usage":0,"limit":null}}"#)
+            .expect(1)
+            .create_async()
+            .await;
+        let model = server
+            .mock("GET", "/models/openai/whisper-large-v3/endpoints")
+            .with_body(r#"{"data":{"id":"openai/whisper-large-v3","name":"OpenAI: Whisper Large V3","endpoints":[]}}"#)
+            .expect(1)
+            .create_async()
+            .await;
+        let r = openrouter(&server, "openai/whisper-large-v3")
+            .check()
+            .await
+            .unwrap();
+        key.assert_async().await;
+        model.assert_async().await;
+        assert_eq!(r.display_name.as_deref(), Some("OpenAI: Whisper Large V3"));
+    }
+
+    #[tokio::test]
+    async fn openrouter_bad_key_stops_before_model_lookup() {
+        let mut server = mockito::Server::new_async().await;
+        server
+            .mock("GET", "/key")
+            .with_status(401)
+            .with_body(r#"{"error":{"code":401,"message":"No auth credentials found"}}"#)
+            .create_async()
+            .await;
+        let model = server
+            .mock("GET", Matcher::Regex("^/models/".into()))
+            .expect(0)
+            .create_async()
+            .await;
+        let e = openrouter(&server, "a/b").check().await.unwrap_err();
+        model.assert_async().await;
+        assert!(matches!(e, ProviderError::InvalidKey { .. }));
+    }
+
+    #[tokio::test]
+    async fn openrouter_unknown_model_is_reported() {
+        let mut server = mockito::Server::new_async().await;
+        server
+            .mock("GET", "/key")
+            .with_body(r#"{"data":{}}"#)
+            .create_async()
+            .await;
+        server
+            .mock("GET", "/models/nobody/nothing/endpoints")
+            .with_status(404)
+            .with_body(r#"{"error":{"code":404,"message":"Model not found"}}"#)
+            .create_async()
+            .await;
+        let e = openrouter(&server, "nobody/nothing")
+            .check()
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(e, ProviderError::ModelNotFound { ref model, .. } if model == "nobody/nothing")
+        );
+    }
+
+    #[test]
+    fn openrouter_chat_uses_max_tokens() {
+        let c = OpenAiClient::openrouter(http::client(), None, "k".into(), "m", None);
+        let b = c.chat_body(&TextRequest::new("x").max_tokens(42));
+        assert_eq!(b["max_tokens"], 42);
+        assert!(b.get("max_completion_tokens").is_none());
+    }
+
+    #[tokio::test]
+    async fn error_inside_a_200_response_is_an_error() {
+        let mut server = mockito::Server::new_async().await;
+        server
+            .mock("POST", "/chat/completions")
+            .with_body(
+                json!({
+                    "choices": [{
+                        "finish_reason": "error",
+                        "message": {"content": ""},
+                        "error": {"code": 502, "message": "Upstream provider returned an error"}
+                    }]
+                })
+                .to_string(),
+            )
+            .create_async()
+            .await;
+        let e = openrouter(&server, "a/b")
+            .generate(&TextRequest::new("x"))
+            .await
+            .unwrap_err();
+        assert!(matches!(e, ProviderError::Unavailable { status: 502, .. }));
+    }
+
+    #[tokio::test]
+    async fn openrouter_transcription_sends_keyterms_and_no_prompt() {
+        let mut server = mockito::Server::new_async().await;
+        let m = server
+            .mock("POST", "/audio/transcriptions")
+            .match_body(Matcher::AllOf(vec![
+                Matcher::Regex(r#"name="model"\r\n\r\nopenai/whisper-large-v3\r\n"#.into()),
+                Matcher::Regex(r#"name="keyterms\[\]"\r\n\r\nKubernetes\r\n"#.into()),
+                Matcher::Regex(r#"name="response_format"\r\n\r\nverbose_json\r\n"#.into()),
+            ]))
+            .with_body_from_request(|req| {
+                let body = String::from_utf8_lossy(req.body().unwrap()).into_owned();
+                let text = if body.contains(r#"name="prompt""#) {
+                    "PROMPT WAS SENT"
+                } else {
+                    "ok"
+                };
+                json!({ "text": text }).to_string().into_bytes()
+            })
+            .create_async()
+            .await;
+        let mut req = TranscribeRequest::new(AudioInput::wav(b"RIFF".to_vec()));
+        req.keywords = vec!["Kubernetes".into()];
+        req.prompt = Some("previous sentence".into());
+        let t = openrouter(&server, "openai/whisper-large-v3")
+            .transcribe(&req)
+            .await
+            .unwrap();
+        m.assert_async().await;
+        assert_eq!(t.text, "ok");
+    }
+
+    #[tokio::test]
+    async fn openrouter_model_list_includes_transcription_models() {
+        let mut server = mockito::Server::new_async().await;
+        server
+            .mock("GET", "/models")
+            .match_query(Matcher::Missing)
+            .with_body(r#"{"data":[{"id":"anthropic/claude-opus-5-5"},{"id":"openai/gpt-6-sol"}]}"#)
+            .create_async()
+            .await;
+        server
+            .mock("GET", "/models")
+            .match_query(Matcher::UrlEncoded(
+                "output_modalities".into(),
+                "transcription".into(),
+            ))
+            .with_body(r#"{"data":[{"id":"openai/whisper-large-v3"}]}"#)
+            .create_async()
+            .await;
+        let ids = openrouter(&server, "x").list_models().await.unwrap();
+        assert_eq!(
+            ids,
+            vec![
+                "anthropic/claude-opus-5-5",
+                "openai/gpt-6-sol",
+                "openai/whisper-large-v3"
+            ]
+        );
     }
 }

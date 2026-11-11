@@ -29,10 +29,10 @@ enum Command {
     Add {
         #[arg(long)]
         name: String,
-        /// anthropic or openai (any OpenAI-compatible service).
+        /// anthropic, openai (any OpenAI-compatible service) or openrouter.
         #[arg(long)]
         kind: ProviderKind,
-        /// Default: claude-opus-5-5 for anthropic; required for openai.
+        /// Default: claude-opus-5-5 for anthropic; required otherwise.
         #[arg(long)]
         model: Option<String>,
         /// Only for proxies or OpenAI-compatible services other than OpenAI.
@@ -122,6 +122,12 @@ async fn run(command: Command) -> CliResult {
                     return Err("--model is required for openai profiles. \
                                 Use gpt-transcribe for speech; run `models` on a \
                                 profile to see the chat models your key can use."
+                        .into());
+                }
+                (None, ProviderKind::Openrouter) => {
+                    return Err("--model is required for openrouter profiles, such as \
+                                openai/whisper-large-v3 for speech. Run `models` on a \
+                                profile to see every model OpenRouter offers."
                         .into());
                 }
             };

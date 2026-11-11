@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 
 // ---- Types mirrored from app/src-tauri/src/settings.rs ----
 
-type Kind = "anthropic" | "openai_compatible";
+type Kind = "anthropic" | "openai_compatible" | "openrouter";
 type Role = "speech_to_text" | "vision" | "text";
 
 interface Profile {
@@ -43,7 +43,7 @@ const ROLES: { id: Role; name: string; desc: string }[] = [
   {
     id: "speech_to_text",
     name: "Speech to text",
-    desc: "Turns meeting audio into text. Needs an OpenAI-compatible profile with a transcription model, such as gpt-transcribe.",
+    desc: "Turns meeting audio into text. Needs an OpenAI or OpenRouter profile with a transcription model, such as gpt-transcribe or openai/whisper-large-v3.",
   },
   {
     id: "vision",
@@ -60,11 +60,13 @@ const ROLES: { id: Role; name: string; desc: string }[] = [
 const KIND_LABEL: Record<Kind, string> = {
   anthropic: "Anthropic",
   openai_compatible: "OpenAI-compatible",
+  openrouter: "OpenRouter",
 };
 
 const DEFAULT_URL: Record<Kind, string> = {
   anthropic: "https://api.anthropic.com",
   openai_compatible: "https://api.openai.com/v1",
+  openrouter: "https://openrouter.ai/api/v1",
 };
 
 interface Preset {
@@ -79,6 +81,7 @@ const PRESETS: Preset[] = [
   { label: "Anthropic", name: "Claude", kind: "anthropic", model: "claude-opus-5-5" },
   { label: "OpenAI speech", name: "OpenAI speech", kind: "openai_compatible", model: "gpt-transcribe" },
   { label: "OpenAI chat", name: "OpenAI", kind: "openai_compatible", model: "" },
+  { label: "OpenRouter", name: "OpenRouter", kind: "openrouter", model: "" },
   {
     label: "Ollama (local)",
     name: "Ollama",
@@ -396,10 +399,11 @@ function openForm(existing?: Profile) {
     const k = kind.value as Kind;
     baseUrl.placeholder = DEFAULT_URL[k];
     legacyRow.style.display = k === "openai_compatible" ? "" : "none";
-    keyHint.textContent =
-      k === "anthropic"
-        ? "From console.anthropic.com → API keys."
-        : "From your provider's dashboard. Not needed for local servers such as Ollama.";
+    keyHint.textContent = {
+      anthropic: "From console.anthropic.com → API keys.",
+      openrouter: "From openrouter.ai/keys. One key reaches models from many providers.",
+      openai_compatible: "From your provider's dashboard. Not needed for local servers such as Ollama.",
+    }[k];
   };
   kind.addEventListener("change", syncKind);
   syncKind();

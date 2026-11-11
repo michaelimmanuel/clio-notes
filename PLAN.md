@@ -73,6 +73,7 @@ Adapters planned for v1:
 | Anthropic Messages API | `TextGenerator` (screen reading, text) |
 | OpenAI-compatible chat completions (configurable base URL) | `TextGenerator` for OpenAI, OpenRouter, Gemini's compatible endpoint, Ollama and similar |
 | OpenAI-compatible `/audio/transcriptions`, chunked on voice-activity boundaries | `SpeechToText` for OpenAI, Groq, self-hosted Whisper servers and similar |
+| OpenRouter (same adapter, own key check, model lookup, `keyterms[]` vocabulary and in-body errors) | `TextGenerator` and `SpeechToText` through one key for many providers |
 | One native streaming speech provider over WebSocket (chosen in M2) | `SpeechToText` with lower latency |
 
 Rules:
@@ -115,6 +116,7 @@ readable, and timestamps line up when played back.
 
 - [x] Provider traits and roles (Anthropic profiles cannot be assigned to speech to text)
 - [x] Anthropic adapter and OpenAI-compatible chat adapter
+- [x] OpenRouter provider (all three roles)
 - [x] OpenAI-compatible transcription adapter (`gpt-transcribe` keywords; segment timestamps on Whisper models)
 - [x] Provider profiles, key storage in Credential Manager, role assignment
 - [x] Settings screen with "Test connection" and "Load models"

@@ -69,6 +69,13 @@ impl ProviderClient {
                 profile.effort.clone(),
                 profile.legacy_max_tokens,
             )),
+            ProviderKind::Openrouter => Self::OpenAi(OpenAiClient::openrouter(
+                http.clone(),
+                profile.base_url.as_deref(),
+                key.unwrap_or_default(),
+                profile.model.clone(),
+                profile.effort.clone(),
+            )),
         })
     }
 
