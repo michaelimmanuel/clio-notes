@@ -29,7 +29,7 @@ readable meeting notes with screenshots while the meeting is happening.
 mic task ─────┐
 loopback task ┴► VAD ► SpeechToText ──► TranscriptEvent ─┐
                                                          ├► timeline (SQLite) ► segmenter
-screen task ► differ ► KeyframeEvent ► VisionExtractor ──┘                         │
+screen task ► differ ► KeyframeEvent ► screen reading ───┘                         │
                                                                 corrector ◄────────┘
                                                                     │
                                                              section writer ► live UI
@@ -57,20 +57,21 @@ fixtures/      recorded test meetings (audio + frames), not committed if they co
 
 ## Provider layer (bring your own key)
 
-Three traits. The pipeline only ever sees the traits.
+Two traits and three roles. The pipeline only ever sees the traits. Screen reading is a
+`TextGenerator` call with images attached, assigned to a profile whose model accepts images.
 
 | Trait | Job | Used by |
 |---|---|---|
-| `SpeechToText` | audio in, timestamped transcript events out | live transcription |
-| `VisionExtractor` | keyframe image in, structured screen content out | screen pipeline |
-| `TextGenerator` | prompt in, text or JSON out | corrector, section writer, final pass |
+| `SpeechToText` | audio clip in, text (and segment timestamps where the provider gives them) out | live transcription |
+| `TextGenerator` with images (role: screen reading) | keyframe image in, structured screen content out | screen pipeline |
+| `TextGenerator` (role: text generation) | prompt in, text or JSON out | corrector, section writer, final pass |
 
 Adapters planned for v1:
 
 | Adapter | Covers |
 |---|---|
-| Anthropic Messages API | `VisionExtractor`, `TextGenerator` |
-| OpenAI-compatible chat completions (configurable base URL) | `VisionExtractor`, `TextGenerator` for OpenAI, OpenRouter, Gemini's compatible endpoint, Ollama and similar |
+| Anthropic Messages API | `TextGenerator` (screen reading, text) |
+| OpenAI-compatible chat completions (configurable base URL) | `TextGenerator` for OpenAI, OpenRouter, Gemini's compatible endpoint, Ollama and similar |
 | OpenAI-compatible `/audio/transcriptions`, chunked on voice-activity boundaries | `SpeechToText` for OpenAI, Groq, self-hosted Whisper servers and similar |
 | One native streaming speech provider over WebSocket (chosen in M2) | `SpeechToText` with lower latency |
 
@@ -103,19 +104,21 @@ passes.
 - [x] Shared monotonic clock stamped on all three streams
 - [x] Recorder mode that saves a whole session as a fixture (two WAVs, frames, timestamps):
       `cargo run -p capture --bin record -- --help`
-- [ ] Exit check on a real meeting
+- [x] Exit check on a real meeting
 
 **Exit check:** record a 10-minute real meeting; audio from both sides is clear, frames are
 readable, and timestamps line up when played back.
 
 ### M1 — Provider layer and settings
 
-- [ ] The three traits and the capability model
-- [ ] Anthropic adapter and OpenAI-compatible chat adapter
-- [ ] OpenAI-compatible chunked transcription adapter
-- [ ] Provider profiles, key storage in Credential Manager, role assignment
-- [ ] Settings screen with "Test connection"
-- [ ] Error mapping: bad key, rate limit, quota, timeout and network each produce a distinct message
+- [x] Provider traits and roles (Anthropic profiles cannot be assigned to speech to text)
+- [x] Anthropic adapter and OpenAI-compatible chat adapter
+- [x] OpenAI-compatible transcription adapter (`gpt-transcribe` keywords; segment timestamps on Whisper models)
+- [x] Provider profiles, key storage in Credential Manager, role assignment
+- [x] Settings screen with "Test connection" and "Load models"
+- [x] Error mapping: bad key, no credit, rate limit, model not found, refusal, truncation, timeout and network
+- [x] `provider-check` CLI: `cargo run -p providers --bin provider-check -- --help`
+- [ ] Exit check with real keys
 
 **Exit check:** with keys from two different providers, each role can be switched between them
 in Settings without restarting, and a wrong key shows a clear error.

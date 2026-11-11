@@ -2,42 +2,45 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="stylesheet" href="/src/styles.css" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Tauri App</title>
+    <link rel="stylesheet" href="/src/styles.css" />
+    <title>Clio Notes</title>
     <script type="module" src="/src/main.ts" defer></script>
   </head>
-
   <body>
-    <main class="container">
-      <h1>Welcome to Tauri</h1>
-
-      <div class="row">
-        <a href="https://vite.dev" target="_blank">
-          <img src="/src/assets/vite.svg" class="logo vite" alt="Vite logo" />
-        </a>
-        <a href="https://tauri.app" target="_blank">
-          <img
-            src="/src/assets/tauri.svg"
-            class="logo tauri"
-            alt="Tauri logo"
-          />
-        </a>
-        <a href="https://www.typescriptlang.org/docs" target="_blank">
-          <img
-            src="/src/assets/typescript.svg"
-            class="logo typescript"
-            alt="typescript logo"
-          />
-        </a>
+    <header class="topbar">
+      <div class="brand">
+        <span class="mark" aria-hidden="true">C</span>
+        <span class="brand-name">Clio Notes</span>
       </div>
-      <p>Click on the Tauri logo to learn more about the framework</p>
+      <span class="crumb">Settings</span>
+    </header>
 
-      <form class="row" id="greet-form">
-        <input id="greet-input" placeholder="Enter a name..." />
-        <button type="submit">Greet</button>
-      </form>
-      <p id="greet-msg"></p>
+    <main class="page">
+      <section class="intro">
+        <h1>AI providers</h1>
+        <p>
+          Clio Notes runs on your own API keys. Each job below uses one provider
+          profile. Keys are kept in Windows Credential Manager, never in files.
+        </p>
+      </section>
+
+      <section>
+        <h2>Jobs</h2>
+        <div id="roles" class="card roles"></div>
+      </section>
+
+      <section>
+        <div class="row-between">
+          <h2>Profiles</h2>
+          <button id="add-profile" class="btn primary" type="button">Add profile</button>
+        </div>
+        <div id="form-slot"></div>
+        <div id="profiles" class="profiles"></div>
+        <p id="settings-path" class="fineprint"></p>
+      </section>
     </main>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
   </body>
 </html>

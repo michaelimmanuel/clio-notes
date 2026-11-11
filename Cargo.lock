@@ -819,6 +819,8 @@ name = "clio-notes"
 version = "0.1.0"
 dependencies = [
  "pipeline",
+ "providers",
+ "reqwest",
  "serde",
  "serde_json",
  "tauri",
