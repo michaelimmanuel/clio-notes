@@ -1,0 +1,10 @@
+[package]
+name = "storage"
+description = "SQLite timeline, keyframe image files and notes export"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+

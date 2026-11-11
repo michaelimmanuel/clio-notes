@@ -1,0 +1,23 @@
+[package]
+name = "meeting-ai-app"
+description = "Meeting AI desktop app (Tauri shell)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+# The `_lib` suffix keeps the lib name distinct from the bin name, which
+# matters on Windows (https://github.com/rust-lang/cargo/issues/8519).
+name = "meeting_ai_app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+pipeline.workspace = true
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

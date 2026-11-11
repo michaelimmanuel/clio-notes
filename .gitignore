@@ -1,0 +1,8 @@
+/target
+node_modules/
+dist/
+# Recorded meetings can contain real content.
+/fixtures/*
+!/fixtures/.gitkeep
+*.wav
+.env

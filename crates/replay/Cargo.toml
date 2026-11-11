@@ -1,0 +1,11 @@
+[package]
+name = "replay"
+description = "CLI that feeds a recorded meeting fixture through the pipeline"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+pipeline.workspace = true
+storage.workspace = true

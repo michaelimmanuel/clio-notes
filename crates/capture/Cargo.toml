@@ -1,0 +1,19 @@
+[package]
+name = "capture"
+description = "Microphone, system-audio loopback and screen capture on one shared clock"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+anyhow = "1.0.104"
+clap = { version = "4.6.7", features = ["derive"] }
+cpal = "0.18.2"
+ctrlc = "3.5.2"
+hound = "3.5.1"
+image = { version = "0.25.10", default-features = false, features = ["png"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+xcap = "0.9.10"
+

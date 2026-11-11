@@ -1,0 +1,10 @@
+[package]
+name = "providers"
+description = "Provider traits (speech-to-text, vision, text) and their adapters"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+
