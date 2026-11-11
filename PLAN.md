@@ -81,14 +81,16 @@ Rules:
   picks a profile independently, so a user can mix providers.
 - Keys are stored in Windows Credential Manager (`keyring` crate). They are never written to the
   config file, the database or the logs.
-- Settings has a "Test connection" button per profile that makes one minimal call and reports
-  the real error.
-- Each adapter declares its capabilities (streaming, image input, JSON output) so the UI can
-  refuse an invalid choice, for example a text-only model as `VisionExtractor`.
+- Settings has a "Test connection" button per profile that checks the key and model with the
+  provider's free model-lookup endpoint and reports the real error.
+- Settings refuses role assignments a provider type can never serve (Anthropic for speech to
+  text). Whether an OpenAI-compatible model accepts images cannot be known in advance, so a
+  wrong model for screen reading shows up as a provider error on first use.
 - Prompts are provider-neutral and live in `pipeline/`. Adapters only translate the request
   format.
-- Structured output is validated against a schema in our own code and retried once on failure;
-  we do not rely on a provider-specific JSON mode.
+- Structured output uses the provider's schema mode where it exists (Anthropic
+  `output_config.format`, OpenAI `response_format`), and is still validated in our own code and
+  retried once on failure.
 
 ## Milestones
 
