@@ -1,4 +1,4 @@
-# Meeting AI — Development Plan
+# Clio Notes — Development Plan
 
 A local Windows desktop app that captures a meeting's audio and the shared screen, and writes
 readable meeting notes with screenshots while the meeting is happening.

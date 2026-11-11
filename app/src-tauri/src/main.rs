@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    meeting_ai_app_lib::run()
+    clio_notes_lib::run()
 }

@@ -721,6 +721,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1c133bc6a41be0d194c306b5506d15e6feeea7b1d6604bd3f8310dfb2ca96486"
 
 [[package]]
+name = "clio-notes"
+version = "0.1.0"
+dependencies = [
+ "pipeline",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-opener",
+]
+
+[[package]]
 name = "colorchoice"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2612,18 +2624,6 @@ dependencies = [
  "log",
  "tendril",
  "web_atoms 0.3.0",
-]
-
-[[package]]
-name = "meeting-ai-app"
-version = "0.1.0"
-dependencies = [
- "pipeline",
- "serde",
- "serde_json",
- "tauri",
- "tauri-build",
- "tauri-plugin-opener",
 ]
 
 [[package]]
