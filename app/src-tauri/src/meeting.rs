@@ -8,7 +8,8 @@
 //! - `meeting-notes`: a [`NotesEvent`] for each notes section and each
 //!   transcript line whose spelling was corrected;
 //! - `meeting-finished`: a [`MeetingSummary`] once capture has stopped and
-//!   every pending request has finished.
+//!   every pending request has finished. The final pass then starts and is
+//!   reported with `meeting-final` (see [`crate::meetings`]).
 
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -37,6 +38,17 @@ const SCREEN_FPS: f64 = 1.0;
 #[derive(Default)]
 pub struct MeetingState {
     running: Mutex<Option<Running>>,
+}
+
+impl MeetingState {
+    /// The folder of the meeting being recorded, if any.
+    pub fn running_dir(&self) -> Option<String> {
+        self.running
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|r| r.info.dir.clone())
+    }
 }
 
 struct Running {
@@ -353,6 +365,7 @@ pub async fn start_meeting(
     let (notes_in_tx, notes_in_rx) = mpsc::unbounded_channel::<NotesInput>();
     let (notes_tx, mut notes_rx) = mpsc::unbounded_channel::<NotesEvent>();
     let mut notes_in = None;
+    let final_writer = writer.as_ref().map(|(_, w)| w.clone());
     if let Some((_, writer)) = writer {
         tauri::async_runtime::spawn(notes_stream(
             SectionConfig::default(),
@@ -377,6 +390,7 @@ pub async fn start_meeting(
         drop(notes_tx);
     }
     let notes_path = dir.join("notes-live.md");
+    let final_dir = dir.clone();
 
     // Owns the timeline: stores lines, keyframes and notes and forwards
     // every event to the UI.
@@ -479,6 +493,8 @@ pub async fn start_meeting(
         let meetings = finished_app.state::<MeetingState>();
         meetings.running.lock().unwrap().take();
         let _ = finished_app.emit("meeting-finished", &summary);
+        // Errors are reported to the UI by `meeting-final`.
+        let _ = crate::meetings::run_final_pass(&finished_app, &final_dir, final_writer).await;
     });
 
     *meetings.running.lock().unwrap() = Some(Running {

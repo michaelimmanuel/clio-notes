@@ -15,6 +15,7 @@
       </div>
       <nav class="tabs" role="tablist" aria-label="Views">
         <button class="tab" type="button" role="tab" data-view="meeting" aria-selected="true">Meeting</button>
+        <button class="tab" type="button" role="tab" data-view="meetings" aria-selected="false">Meetings</button>
         <button class="tab" type="button" role="tab" data-view="settings" aria-selected="false">Settings</button>
       </nav>
     </header>
@@ -42,6 +43,17 @@
         <div id="notes" class="notes" hidden></div>
         <div id="transcript" class="card transcript"></div>
       </section>
+    </main>
+
+    <main class="page" id="view-meetings" hidden>
+      <section class="intro">
+        <h1>Meetings</h1>
+        <p>
+          Every meeting you record, with its final notes. Each one is a folder with notes.md,
+          its images, the transcript and the recorded audio.
+        </p>
+      </section>
+      <section id="meetings"></section>
     </main>
 
     <main class="page" id="view-settings" hidden>

@@ -9,6 +9,7 @@ publish.workspace = true
 [dependencies]
 base64 = "0.23.1"
 capture.workspace = true
+chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
 earshot = "1.2.2"
 hound = "3.5.1"
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg"] }

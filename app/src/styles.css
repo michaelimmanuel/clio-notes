@@ -165,7 +165,7 @@ p {
   color: var(--warn);
 }
 
-.meeting-status a {
+a {
   color: var(--accent);
 }
 
@@ -377,6 +377,144 @@ p {
   font-size: 11px;
   color: var(--muted);
   white-space: nowrap;
+}
+
+/* Meetings */
+
+.meeting-list {
+  display: grid;
+  overflow: hidden;
+}
+
+.meeting-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.meeting-row + .meeting-row {
+  border-top: 1px solid var(--border);
+}
+
+.meeting-row:hover {
+  background: var(--surface-2);
+}
+
+.meeting-row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.meeting-row-main {
+  min-width: 0;
+}
+
+.meeting-row-title {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.fineprint.tight {
+  margin-top: 2px;
+}
+
+.status-badge {
+  flex: none;
+  font-size: 11px;
+  font-weight: 700;
+  border-radius: 5px;
+  padding: 2px 7px;
+  color: var(--muted);
+  background: var(--surface-2);
+  white-space: nowrap;
+}
+
+.status-badge.done {
+  color: var(--ok);
+  background: var(--ok-soft);
+}
+
+.status-badge.recording,
+.status-badge.interrupted {
+  color: var(--err);
+  background: var(--err-soft);
+}
+
+.status-badge.finalizing {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.meeting-detail {
+  display: grid;
+  gap: 14px;
+}
+
+.back {
+  font-size: 13px;
+  justify-self: start;
+}
+
+.detail-title {
+  font-size: 20px;
+  text-transform: none;
+  letter-spacing: -0.01em;
+  color: var(--text);
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.detail-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.confirm-text {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.btn.danger-text {
+  color: var(--err);
+}
+
+.meeting-detail .seg {
+  margin-bottom: 0;
+  justify-self: start;
+}
+
+.final-head {
+  padding: 14px 16px;
+  display: grid;
+  gap: 8px;
+}
+
+.final-summary {
+  max-width: none;
+}
+
+.final-h {
+  font-size: 14px;
+  margin-top: 4px;
+}
+
+.owner {
+  font-weight: 600;
+}
+
+.result.warn {
+  color: var(--warn);
+  background: var(--warn-soft);
 }
 
 /* Screen keyframes in the transcript */
@@ -830,5 +968,12 @@ select:focus,
   .topbar {
     padding-left: 16px;
     padding-right: 16px;
+  }
+}
+
+@media (max-width: 420px) {
+  /* Three tabs and the name do not fit on one line; the mark stays. */
+  .brand-name {
+    display: none;
   }
 }

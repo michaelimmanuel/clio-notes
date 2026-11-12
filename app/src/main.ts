@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { $, errorText, h, toast } from "./dom";
 import { initDevices } from "./devices";
 import { initMeeting } from "./meeting";
+import { initMeetings } from "./meetings";
 
 // ---- Types mirrored from app/src-tauri/src/settings.rs ----
 
@@ -534,9 +535,11 @@ window.addEventListener("DOMContentLoaded", async () => {
     $("profiles").replaceChildren(notice());
     $("meeting-controls").replaceChildren(notice());
     $("devices").replaceChildren(notice());
+    $("meetings").replaceChildren(notice());
     return;
   }
   initDevices();
+  initMeetings().catch((e) => toast(`Could not set up the meetings view: ${errorText(e)}`, true));
   initMeeting().catch((e) => toast(`Could not set up the meeting view: ${errorText(e)}`, true));
   try {
     settings = await invoke<SettingsView>("get_settings");

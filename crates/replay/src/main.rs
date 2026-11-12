@@ -3,9 +3,10 @@
 //! Plays `mic.wav` (as "Me"), `system.wav` (as "Others") and the screen
 //! frames from a fixture folder in real time or faster. Audio is transcribed
 //! with the speech-to-text profile from Settings; frames go through keyframe
-//! selection and screen reading, and both feed the live notes. Prints
-//! events as they arrive and stores the result in a timeline database, with
-//! keyframe images and `notes-live.md` next to it.
+//! selection and screen reading, and both feed the live notes; the final
+//! pass runs at the end. Prints events as they arrive and stores the result
+//! in a timeline database, with keyframe images, `notes-live.md`, `notes.md`,
+//! `transcript.md` and `images/` next to it.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -59,9 +60,12 @@ struct Cli {
     /// Screen-reading profile to use instead of the one assigned in Settings.
     #[arg(long)]
     vision_profile: Option<String>,
-    /// Do not write notes.
+    /// Do not write notes (live or final).
     #[arg(long)]
     no_notes: bool,
+    /// Write the live notes but skip the final pass.
+    #[arg(long)]
+    no_final: bool,
     /// Text-generation profile to use instead of the one assigned in Settings.
     #[arg(long)]
     text_profile: Option<String>,
@@ -128,7 +132,10 @@ async fn run(cli: Cli) -> Result<(), String> {
         let _ = std::fs::remove_dir_all(out_dir.join("keyframes"));
     }
     let notes_path = out_dir.join("notes-live.md");
-    let _ = std::fs::remove_file(&notes_path);
+    for file in ["notes-live.md", "notes.md", "transcript.md"] {
+        let _ = std::fs::remove_file(out_dir.join(file));
+    }
+    let _ = std::fs::remove_dir_all(out_dir.join("images"));
     let timeline = Timeline::open(&db_path).map_err(|e| e.to_string())?;
     timeline
         .set_meta("source", &cli.fixture.display().to_string())
@@ -286,6 +293,7 @@ async fn run(cli: Cli) -> Result<(), String> {
         None => eprintln!("  Notes  off: no text-generation profile assigned"),
     }
     let mut notes_in = None;
+    let final_writer = writer.as_ref().map(|w| w.generator.clone());
     if let Some(w) = writer {
         let mut cfg = SectionConfig::default();
         if let Some(s) = cli.section_max_s {
@@ -358,6 +366,15 @@ async fn run(cli: Cli) -> Result<(), String> {
     for w in workers {
         w.await.map_err(|e| e.to_string())?;
     }
+    drop(timeline);
+
+    let final_result = if cli.no_notes || cli.no_final {
+        None
+    } else {
+        let final_started = Instant::now();
+        let (notes, usage) = pipeline::finalize(&out_dir, final_writer.as_deref()).await?;
+        Some((notes, usage, final_started.elapsed()))
+    };
 
     if stats.utterances > 0 {
         eprintln!(
@@ -402,6 +419,23 @@ async fn run(cli: Cli) -> Result<(), String> {
             stats.notes_tokens_out,
             notes_path.display(),
         );
+    }
+    if let Some((notes, usage, took)) = &final_result {
+        match &notes.note {
+            Some(note) => eprintln!("Final notes: {note}"),
+            None => eprintln!(
+                "Final notes: {} topics from {} live sections, {} decisions, {} action items. \
+                 {:.1} s, {} in / {} out tokens.",
+                notes.topics.len(),
+                stats.sections,
+                notes.decisions.len(),
+                notes.actions.len(),
+                took.as_secs_f64(),
+                usage.input_tokens,
+                usage.output_tokens
+            ),
+        }
+        eprintln!("  {}", out_dir.join("notes.md").display());
     }
     eprintln!(
         "Took {:.1} s. Timeline: {}",

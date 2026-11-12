@@ -330,7 +330,19 @@ fn save(dir: &std::path::Path, t_ms: u64, image: &RgbaImage) -> Result<Saved, St
     image.save(&path).map_err(|e| e.to_string())?;
 
     let (w, h) = image.dimensions();
-    let tw = 320u32;
+    Ok(Saved {
+        file: rel,
+        width: w,
+        height: h,
+        jpeg: read::encode_for_reading(image),
+        thumbnail: thumbnail(image, 320)?,
+    })
+}
+
+/// A JPEG preview `width` pixels wide, as a data URL for the UI.
+pub fn thumbnail(image: &RgbaImage, width: u32) -> Result<String, String> {
+    let (w, h) = image.dimensions();
+    let tw = width.min(w.max(1));
     let th = ((h as f32 * tw as f32 / w.max(1) as f32).round() as u32).max(1);
     let small = image::DynamicImage::ImageRgba8(image::imageops::resize(
         image,
@@ -339,21 +351,22 @@ fn save(dir: &std::path::Path, t_ms: u64, image: &RgbaImage) -> Result<Saved, St
         FilterType::Triangle,
     ))
     .into_rgb8();
-    let mut thumb = std::io::Cursor::new(Vec::new());
-    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut thumb, 75)
+    let mut out = std::io::Cursor::new(Vec::new());
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 80)
         .encode_image(&small)
         .map_err(|e| e.to_string())?;
-    let thumbnail = format!(
+    Ok(format!(
         "data:image/jpeg;base64,{}",
-        base64::engine::general_purpose::STANDARD.encode(thumb.into_inner())
-    );
-    Ok(Saved {
-        file: rel,
-        width: w,
-        height: h,
-        jpeg: read::encode_for_reading(image),
-        thumbnail,
-    })
+        base64::engine::general_purpose::STANDARD.encode(out.into_inner())
+    ))
+}
+
+/// A preview of an image file, as a data URL for the UI.
+pub fn thumbnail_of_file(path: &std::path::Path, width: u32) -> Result<String, String> {
+    let image = image::open(path)
+        .map_err(|e| format!("cannot read {}: {e}", path.display()))?
+        .into_rgba8();
+    thumbnail(&image, width)
 }
 
 #[cfg(test)]

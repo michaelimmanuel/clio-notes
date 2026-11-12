@@ -5,6 +5,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { refreshDevices } from "./devices";
+import { showMeetings } from "./meetings";
 import { $, errorText, h, toast } from "./dom";
 
 // ---- Types mirrored from app/src-tauri/src/meeting.rs and crates/pipeline ----
@@ -142,6 +143,8 @@ let phase: Phase = "idle";
 let meeting: MeetingInfo | null = null;
 let speechLabel: string | null = null;
 let lastSummary: MeetingSummary | null = null;
+/// The final pass of the last meeting: running, done (with its title) or failed.
+let lastFinal: { state: "writing" | "done" | "failed"; text: string } | null = null;
 const rows = new Map<string, Row>();
 const shots = new Map<number, Shot>();
 const notes = new Map<number, NoteCard>();
@@ -234,7 +237,29 @@ function renderControls() {
           lastSummary.error ??
             `Last meeting: ${lastSummary.lines} lines${lastSummary.failed ? ` (${lastSummary.failed} failed)` : ""}, ` +
               `${lastSummary.keyframes} keyframes (${lastSummary.reads} read), ` +
-              `${lastSummary.sections} notes section${lastSummary.sections === 1 ? "" : "s"}. Saved in ${lastSummary.dir}`,
+              `${lastSummary.sections} notes section${lastSummary.sections === 1 ? "" : "s"}.`,
+          lastFinal ? h("br") : null,
+          lastFinal?.state === "writing" ? "Writing the final notes…" : null,
+          lastFinal?.state === "failed" ? `Final notes failed: ${lastFinal.text}` : null,
+          lastFinal?.state === "done"
+            ? h(
+                "span",
+                {},
+                `Final notes ready: ${lastFinal.text}. `,
+                h(
+                  "a",
+                  {
+                    href: "#",
+                    onclick: (e: Event) => {
+                      e.preventDefault();
+                      showView("meetings");
+                      void showMeetings(meetingId(lastSummary!.dir));
+                    },
+                  },
+                  "Open",
+                ),
+              )
+            : null,
         )
       : null;
 
@@ -445,6 +470,7 @@ async function start() {
   notes.clear();
   readsUsed = 0;
   lastSummary = null;
+  lastFinal = null;
   render();
   try {
     meeting = await invoke<MeetingInfo>("start_meeting");
@@ -555,11 +581,28 @@ function onNotes(e: NotesEvent) {
   renderControls();
 }
 
+/// The meeting's folder name, which the Meetings view uses as its id.
+function meetingId(dir: string): string {
+  return dir.split(/[\\/]/).filter(Boolean).pop() ?? "";
+}
+
+function onFinal(e: { type: "started" | "done" | "failed"; id: string; title?: string; message?: string }) {
+  if (!lastSummary || meetingId(lastSummary.dir) !== e.id) return;
+  lastFinal =
+    e.type === "started"
+      ? { state: "writing", text: "" }
+      : e.type === "done"
+        ? { state: "done", text: e.title ?? "" }
+        : { state: "failed", text: e.message ?? "" };
+  renderControls();
+}
+
 function onFinished(summary: MeetingSummary) {
   window.clearInterval(timer);
   phase = "idle";
   meeting = null;
   lastSummary = summary;
+  lastFinal = { state: "writing", text: "" };
   render();
   if (summary.error) toast(summary.error, true);
   else
@@ -570,10 +613,11 @@ function onFinished(summary: MeetingSummary) {
 
 // ---- Views ----
 
-export type View = "meeting" | "settings";
+export type View = "meeting" | "meetings" | "settings";
 
 export function showView(view: View) {
   $("view-meeting").hidden = view !== "meeting";
+  $("view-meetings").hidden = view !== "meetings";
   $("view-settings").hidden = view !== "settings";
   for (const tab of document.querySelectorAll<HTMLButtonElement>(".tab")) {
     tab.setAttribute("aria-selected", String(tab.dataset.view === view));
@@ -581,6 +625,7 @@ export function showView(view: View) {
   if (view === "meeting") void showMeetingView();
   // Picks up devices plugged in since the list was last read.
   if (view === "settings") void refreshDevices();
+  if (view === "meetings") void showMeetings();
 }
 
 export async function showMeetingView() {
@@ -597,6 +642,7 @@ export async function initMeeting() {
   await listen<PipelineEvent>("meeting-event", (e) => onEvent(e.payload));
   await listen<ScreenEvent>("meeting-screen", (e) => onScreen(e.payload));
   await listen<NotesEvent>("meeting-notes", (e) => onNotes(e.payload));
+  await listen<Parameters<typeof onFinal>[0]>("meeting-final", (e) => onFinal(e.payload));
   for (const btn of document.querySelectorAll<HTMLButtonElement>(".seg-btn")) {
     btn.addEventListener("click", () => showPane(btn.dataset.pane as Pane));
   }

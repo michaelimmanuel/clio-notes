@@ -205,10 +205,24 @@ and correctly answer five questions about what was decided and shown.
 
 ### M5 — Final pass and export
 
-- [ ] End-of-meeting pass: merge sections, remove repetition, choose the best image per topic
-- [ ] Summary, decisions and action items at the top
-- [ ] Export `notes.md` plus an `images/` folder into a per-meeting directory
-- [ ] Meeting list: reopen, re-run the final pass, delete
+- [x] End-of-meeting pass, run automatically when a meeting stops: one text-generation call
+      over the live sections and the screen list merges topics, removes repetition and picks
+      one image per topic (strict JSON schema, validated, retried once). Section and image
+      numbers are checked; spoken/screen marks are kept
+- [x] Title, summary, decisions and action items (with owner when said) at the top
+- [x] Export into the meeting folder: `notes.md`, `images/NN-topic.png` (only the images
+      used, linked by relative paths) and `transcript.md` with screen changes marked. The notes
+      are also stored in the timeline. Without a text profile, or if the call fails, `notes.md`
+      is written from the live notes with a line saying so
+- [x] Meetings tab: list with status (final notes, none, interrupted, recording); each
+      meeting shows its final notes, live notes and transcript; open folder, rewrite final
+      notes, move to the Recycle Bin (with confirmation)
+- [x] `replay` runs the final pass too (`--no-final`)
+- [ ] First live meeting with final notes in the app
+- [ ] Exit check
+
+Measured on the 59 s desktop fixture: 2 live sections became 2 topics with a title, summary and
+1 action item; 12.5 s, about 1.1k input / 1.2k output tokens (gpt-6-luna).
 
 **Exit check:** the exported folder opens correctly in any Markdown viewer, and the final notes
 are shorter and clearer than the live notes for the same meeting.
