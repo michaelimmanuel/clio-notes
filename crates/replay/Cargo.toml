@@ -9,3 +9,7 @@ publish.workspace = true
 [dependencies]
 pipeline.workspace = true
 storage.workspace = true
+providers.workspace = true
+clap = { version = "4.6.7", features = ["derive"] }
+hound = "3.5.1"
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "sync", "time"] }

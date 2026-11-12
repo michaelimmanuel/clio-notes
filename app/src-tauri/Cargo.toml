@@ -16,7 +16,10 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+capture.workspace = true
 pipeline.workspace = true
+storage.workspace = true
+tokio = { version = "1.54.1", features = ["sync"] }
 providers.workspace = true
 tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"

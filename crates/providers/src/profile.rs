@@ -414,7 +414,11 @@ mod tests {
         let text = std::fs::read_to_string(store.path()).unwrap();
         assert!(!text.contains("key"), "settings file must not hold keys");
         std::fs::write(store.path(), format!("\u{feff}{text}")).unwrap();
-        assert_eq!(store.load().unwrap(), s, "a byte-order mark must not break loading");
+        assert_eq!(
+            store.load().unwrap(),
+            s,
+            "a byte-order mark must not break loading"
+        );
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

@@ -8,5 +8,13 @@ publish.workspace = true
 
 [dependencies]
 capture.workspace = true
+earshot = "1.2.2"
+hound = "3.5.1"
 providers.workspace = true
+serde = { version = "1.0.229", features = ["derive"] }
 storage.workspace = true
+thiserror = "2.0.21"
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+
+[dev-dependencies]
+async-trait = "0.1.92"

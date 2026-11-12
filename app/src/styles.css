@@ -113,10 +113,155 @@ p {
   font-weight: 700;
 }
 
-.crumb {
-  color: var(--muted);
+.tabs {
+  display: flex;
+  gap: 4px;
   padding-left: 14px;
   border-left: 1px solid var(--border);
+}
+
+.tab {
+  font: inherit;
+  color: var(--muted);
+  background: none;
+  border: 0;
+  border-radius: 7px;
+  padding: 4px 10px;
+  cursor: pointer;
+}
+
+.tab:hover {
+  color: var(--text);
+  background: var(--surface-2);
+}
+
+.tab[aria-selected="true"] {
+  color: var(--text);
+  background: var(--surface-2);
+  font-weight: 600;
+}
+
+.page[hidden] {
+  display: none;
+}
+
+/* Meeting */
+
+.meeting-controls {
+  display: grid;
+  gap: 10px;
+  padding: 16px;
+}
+
+.meeting-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.meeting-status.warn {
+  color: var(--warn);
+}
+
+.meeting-status a {
+  color: var(--accent);
+}
+
+.dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--ok);
+  flex: none;
+}
+
+.dot.live {
+  background: var(--err);
+  animation: pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dot.live {
+    animation: none;
+  }
+}
+
+.elapsed {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.btn.big {
+  padding: 8px 18px;
+  font-size: 14px;
+}
+
+.transcript {
+  padding: 6px 0;
+}
+
+.transcript .empty {
+  border: 0;
+}
+
+.line {
+  display: grid;
+  grid-template-columns: 52px 64px 1fr;
+  gap: 10px;
+  align-items: baseline;
+  padding: 6px 16px;
+}
+
+.line + .line {
+  border-top: 1px solid var(--border);
+}
+
+.line-time {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.speaker {
+  font-size: 12px;
+  font-weight: 600;
+  border-radius: 6px;
+  padding: 1px 7px;
+  justify-self: start;
+}
+
+.speaker.me {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.speaker.others {
+  color: var(--ok);
+  background: var(--ok-soft);
+}
+
+.line.pending .line-text {
+  color: var(--muted);
+}
+
+.line.failed .line-text {
+  color: var(--err);
+  font-size: 13px;
+}
+
+@media (max-width: 520px) {
+  .line {
+    grid-template-columns: auto 1fr;
+  }
+  .line-text {
+    grid-column: 1 / -1;
+  }
 }
 
 /* Page */

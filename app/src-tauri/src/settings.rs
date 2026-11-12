@@ -14,9 +14,9 @@ use serde::{Deserialize, Serialize};
 use tauri::State;
 
 pub struct AppState {
-    store: SettingsStore,
-    keys: SystemKeyStore,
-    http: reqwest::Client,
+    pub(crate) store: SettingsStore,
+    pub(crate) keys: SystemKeyStore,
+    pub(crate) http: reqwest::Client,
     /// Serializes read-modify-write cycles on the settings file.
     write_lock: Mutex<()>,
 }
@@ -71,6 +71,15 @@ impl AppState {
 pub struct UiError {
     kind: String,
     message: String,
+}
+
+impl UiError {
+    pub(crate) fn new(kind: &str, message: impl Into<String>) -> Self {
+        Self {
+            kind: kind.into(),
+            message: message.into(),
+        }
+    }
 }
 
 impl From<ProviderError> for UiError {

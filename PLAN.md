@@ -129,12 +129,19 @@ in Settings without restarting, and a wrong key shows a clear error.
 
 ### M2 — Live transcription
 
-- [ ] Resample to 16 kHz and run voice-activity detection
-- [ ] Mic and loopback as separate streams labelled "Me" and "Others"
-- [ ] Transcript events written to the SQLite timeline
-- [ ] Live transcript view in the UI
-- [ ] `replay` CLI: run a fixture through the pipeline at real-time or faster speed
-- [ ] Compare two or three speech providers on the fixtures, then build the native streaming adapter for the best one
+- [x] Resample to 16 kHz and run voice-activity detection (earshot, pure Rust); cut utterances
+      at 600 ms pauses, or at the quietest point after 12 s of continuous speech
+- [x] Mic and loopback as separate streams labelled "Me" and "Others"
+- [x] Transcript events written to the SQLite timeline (`meetings/meeting-<time>/timeline.sqlite`,
+      with a speaker field ready for named speakers)
+- [x] Live transcript view in the UI (Meeting tab: Start, Stop, live lines)
+- [x] `replay` CLI: `cargo run -p replay -- fixtures/<session> [--speed 0] [--model <id>]`
+- [x] First live meeting in the app
+- [x] Exit check
+
+Deferred from M2: compare two or three speech providers on the fixtures with `replay`, then
+build the native streaming adapter for the best one (prefer one with diarization, see "Feature:
+speaker identification"). Chunked transcription is good enough to build on until then.
 
 **Exit check:** in a live meeting, text appears within about 3 seconds of speech and a
 30-minute session runs without drops or drift.

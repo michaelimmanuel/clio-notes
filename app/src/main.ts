@@ -1,4 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
+import { $, errorText, h, toast } from "./dom";
+import { initMeeting } from "./meeting";
 
 // ---- Types mirrored from app/src-tauri/src/settings.rs ----
 
@@ -101,51 +103,6 @@ let armedDelete: string | null = null;
 let formOpen = false;
 
 type Result = { state: "ok" | "err" | "pending"; text: string };
-
-// ---- Small DOM helper ----
-
-type Child = Node | string | null | undefined | false;
-
-function h<K extends keyof HTMLElementTagNameMap>(
-  tag: K,
-  props: Record<string, unknown> = {},
-  ...children: Child[]
-): HTMLElementTagNameMap[K] {
-  const el = document.createElement(tag);
-  for (const [key, value] of Object.entries(props)) {
-    if (value === undefined || value === null || value === false) continue;
-    if (key.startsWith("on") && typeof value === "function") {
-      el.addEventListener(key.slice(2), value as EventListener);
-    } else if (key === "class") {
-      el.className = String(value);
-    } else if (key in el && typeof value !== "string") {
-      (el as unknown as Record<string, unknown>)[key] = value;
-    } else {
-      el.setAttribute(key, String(value));
-    }
-  }
-  for (const c of children) {
-    if (c === null || c === undefined || c === false) continue;
-    el.append(c);
-  }
-  return el;
-}
-
-const $ = (id: string) => document.getElementById(id)!;
-
-function errorText(e: unknown): string {
-  if (e && typeof e === "object" && "message" in e) return String((e as { message: unknown }).message);
-  return String(e);
-}
-
-let toastTimer: number | undefined;
-function toast(text: string, isError = false) {
-  const el = $("toast");
-  el.textContent = text;
-  el.className = `toast show${isError ? " err" : ""}`;
-  window.clearTimeout(toastTimer);
-  toastTimer = window.setTimeout(() => (el.className = "toast"), isError ? 5000 : 2200);
-}
 
 function supports(p: { kind: Kind }, role: Role): boolean {
   return !(p.kind === "anthropic" && role === "speech_to_text");
@@ -566,16 +523,18 @@ window.addEventListener("DOMContentLoaded", async () => {
   // does not exist. Say so instead of failing on the first command.
   if (!("__TAURI_INTERNALS__" in window)) {
     ($("add-profile") as HTMLButtonElement).disabled = true;
-    $("profiles").replaceChildren(
+    const notice = () =>
       h(
         "div",
         { class: "result err" },
         "This page only works inside the Clio Notes app window, not in a web browser. " +
           "Stop this server, then run `npm run tauri dev` in the app folder.",
-      ),
-    );
+      );
+    $("profiles").replaceChildren(notice());
+    $("meeting-controls").replaceChildren(notice());
     return;
   }
+  initMeeting().catch((e) => toast(`Could not set up the meeting view: ${errorText(e)}`, true));
   try {
     settings = await invoke<SettingsView>("get_settings");
     render();

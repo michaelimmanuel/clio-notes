@@ -101,6 +101,11 @@ struct Chunk {
     samples: Vec<f32>,
 }
 
+/// Receives every block of mono samples exactly as it is written to the WAV
+/// file, gap padding included, so sample index `n` is session time
+/// `n / sample_rate`. Called on the writer thread, never in the audio callback.
+pub type AudioTap = Box<dyn FnMut(&[f32]) + Send>;
+
 /// A running audio capture. Call [`AudioRecorder::stop`] to finish the file.
 pub struct AudioRecorder {
     stream: cpal::Stream,
@@ -136,6 +141,17 @@ impl AudioRecorder {
         path: &Path,
         clock: SessionClock,
     ) -> Result<Self> {
+        Self::start_with_tap(source, device, path, clock, None)
+    }
+
+    /// Like [`AudioRecorder::start`], and also hands the written samples to `tap`.
+    pub fn start_with_tap(
+        source: AudioSource,
+        device: Option<&str>,
+        path: &Path,
+        clock: SessionClock,
+        tap: Option<AudioTap>,
+    ) -> Result<Self> {
         let host = cpal::default_host();
         let device = find_device(&host, source, device)?;
         let device_name = device.to_string();
@@ -167,7 +183,7 @@ impl AudioRecorder {
 
         let writer = std::thread::Builder::new()
             .name(format!("{source:?}-writer"))
-            .spawn(move || write_loop(wav, sample_rate, clock, chunk_rx, stop_rx))?;
+            .spawn(move || write_loop(wav, sample_rate, clock, chunk_rx, stop_rx, tap))?;
 
         let stream_config: cpal::StreamConfig = config.into();
         let c = counters.clone();
@@ -195,6 +211,11 @@ impl AudioRecorder {
                 device_sample_format: sample_format.to_string(),
             },
         })
+    }
+
+    /// The device's sample rate, which is also the WAV file's and the tap's.
+    pub fn sample_rate(&self) -> u32 {
+        self.info.sample_rate
     }
 
     pub fn device_name(&self) -> &str {
@@ -327,6 +348,7 @@ fn write_loop(
     clock: SessionClock,
     chunks: Receiver<Chunk>,
     stop: Receiver<Instant>,
+    mut tap: Option<AudioTap>,
 ) -> Result<WriterStats> {
     let mut timeline = Timeline::new(sample_rate);
     let mut first_packet_ms = None;
@@ -339,6 +361,13 @@ fn write_loop(
         let pad = timeline.pad_before(end, chunk.samples.len() as u64);
         for _ in 0..pad {
             wav.write_sample(0i16)?;
+        }
+        let mut block = Vec::new();
+        if let Some(tap) = tap.as_mut() {
+            block.reserve(pad as usize + chunk.samples.len());
+            block.resize(pad as usize, 0.0);
+            block.extend(chunk.samples.iter().map(|s| s.clamp(-1.0, 1.0)));
+            tap(&block);
         }
         for s in chunk.samples {
             let s = s.clamp(-1.0, 1.0);
@@ -353,6 +382,9 @@ fn write_loop(
     let pad = timeline.pad_to(clock.offset_of(stopped));
     for _ in 0..pad {
         wav.write_sample(0i16)?;
+    }
+    if let Some(tap) = tap.as_mut().filter(|_| pad > 0) {
+        tap(&vec![0.0; pad as usize]);
     }
     wav.finalize()?;
 

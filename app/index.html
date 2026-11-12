@@ -13,10 +13,31 @@
         <span class="mark" aria-hidden="true">C</span>
         <span class="brand-name">Clio Notes</span>
       </div>
-      <span class="crumb">Settings</span>
+      <nav class="tabs" role="tablist" aria-label="Views">
+        <button class="tab" type="button" role="tab" data-view="meeting" aria-selected="true">Meeting</button>
+        <button class="tab" type="button" role="tab" data-view="settings" aria-selected="false">Settings</button>
+      </nav>
     </header>
 
-    <main class="page">
+    <main class="page" id="view-meeting">
+      <section class="intro">
+        <h1>Meeting</h1>
+        <p>
+          Captures your microphone as “Me” and your computer’s sound as “Others”, and
+          transcribes both while the meeting runs. Make sure everyone knows the meeting is
+          being recorded.
+        </p>
+      </section>
+      <section>
+        <div id="meeting-controls" class="card meeting-controls"></div>
+      </section>
+      <section>
+        <h2>Transcript</h2>
+        <div id="transcript" class="card transcript"></div>
+      </section>
+    </main>
+
+    <main class="page" id="view-settings" hidden>
       <section class="intro">
         <h1>AI providers</h1>
         <p>
