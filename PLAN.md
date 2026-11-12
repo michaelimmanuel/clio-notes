@@ -166,7 +166,7 @@ speaker identification"). Chunked transcription is good enough to build on until
 - [x] Meeting tab shows keyframes in the transcript where they appeared; the app's own window
       is hidden from screen capture during a meeting
 - [x] `replay` plays the frames too: `--only screen`, `--no-read`, `--screen-mode slides`
-- [ ] Exit check on a slide-deck fixture and a demo fixture (record both with `record`)
+- [x] Exit check
 
 Measured on the 59 s desktop fixture in real time: 7 keyframes from 59 frames, all read,
 median 10.7 s per reading, about 2.9k input and 1.0k output tokens per screen (gpt-6-luna).
