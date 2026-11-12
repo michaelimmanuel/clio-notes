@@ -122,7 +122,7 @@ readable, and timestamps line up when played back.
 - [x] Settings screen with "Test connection" and "Load models"
 - [x] Error mapping: bad key, no credit, rate limit, model not found, refusal, truncation, timeout and network
 - [x] `provider-check` CLI: `cargo run -p providers --bin provider-check -- --help`
-- [ ] Exit check with real keys
+- [x] Exit check with real keys
 
 **Exit check:** with keys from two different providers, each role can be switched between them
 in Settings without restarting, and a wrong key shows a clear error.
