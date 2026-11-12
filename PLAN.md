@@ -176,11 +176,29 @@ fixture, the keyframe count stays under the cap and no important screen is misse
 
 ### M4 — Fusion and live notes
 
-- [ ] Segmenter: close a segment on a meaningful screen change or after a time limit
-- [ ] Corrector: fix transcript terms using the screen text, without rephrasing
-- [ ] Section writer: heading, bullets and the matching screenshot for each closed segment
-- [ ] Every note line marked internally as spoken or read from screen, so the two are never merged silently
-- [ ] Live notes view that fills in section by section
+- [x] Sectioner: a section ends when at least 30% of the screen changes (not sooner than 30 s
+      in) or after 3 minutes. Lines and keyframes are assigned by their own time; a section is
+      written once its utterances are back and its screens are read. Stretches with under 12
+      words and no new screen fold into the next section
+- [x] Corrector: phrases that match a screen term apart from case, spacing and punctuation
+      take the screen's spelling locally; real mishearings come back from the section writer
+      as "heard / should be" pairs and are applied only if the replacement is on screen. The
+      text as transcribed is kept in the timeline next to the corrected one
+- [x] Section writer: one text-generation call per section returns the heading, bullets, the
+      screenshot to show and the corrections (strict JSON schema, validated, retried once);
+      sections are written in order, each told the earlier headings
+- [x] Every bullet carries a source (spoken, screen, both) and a kind (point, decision,
+      action); a section with no screens cannot claim "screen" and one with no speech cannot
+      claim a decision
+- [x] Meeting tab: Notes view that fills in section by section, next to the transcript;
+      corrected lines are marked. Sections are also appended to `notes-live.md` in the meeting
+      folder and stored in the timeline (schema v3)
+- [x] `replay` writes notes too: `--no-notes`, `--text-profile`, `--section-max-s`
+- [x] First live meeting with notes in the app
+- [x] Exit check
+
+Measured on the 59 s desktop fixture in real time: 2 sections, about 10 s and 2.0k input /
+0.9k output tokens each (gpt-6-luna), 1 line corrected ("cloud session" to "Claude session").
 
 **Exit check:** on three fixtures, a person who was not in the meeting can read the live notes
 and correctly answer five questions about what was decided and shown.

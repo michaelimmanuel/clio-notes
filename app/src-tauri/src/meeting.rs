@@ -1,10 +1,12 @@
 //! Tauri commands that start and stop a meeting: capture, live transcription,
-//! the screen pipeline and the timeline.
+//! the screen pipeline, live notes and the timeline.
 //!
-//! The UI listens for three events:
+//! The UI listens for four events:
 //! - `meeting-event`: a [`PipelineEvent`] for each utterance as it moves
 //!   from detected to transcribed (or empty, or failed);
 //! - `meeting-screen`: a [`ScreenEvent`] for each keyframe and its reading;
+//! - `meeting-notes`: a [`NotesEvent`] for each notes section and each
+//!   transcript line whose spelling was corrected;
 //! - `meeting-finished`: a [`MeetingSummary`] once capture has stopped and
 //!   every pending request has finished.
 
@@ -15,11 +17,11 @@ use std::sync::mpsc as std_mpsc;
 use capture::{
     AudioRecorder, AudioSource, AudioStats, ScreenRecorder, ScreenStats, ScreenTarget, SessionClock,
 };
-use pipeline::screen;
 use pipeline::{
-    Frame, PipelineEvent, ScreenEvent, ScreenOptions, StreamOptions, screen_stream,
-    transcribe_stream,
+    Frame, NotesEvent, NotesInput, PipelineEvent, ScreenEvent, ScreenOptions, SectionConfig,
+    StreamOptions, notes_stream, screen_stream, transcribe_stream,
 };
+use pipeline::{notes, screen};
 use providers::{ProviderClient, Role, TextGenerator};
 use serde::Serialize;
 use storage::{Speaker, Timeline};
@@ -55,6 +57,9 @@ pub struct MeetingInfo {
     /// The screen-reading model, or `None` when no profile is assigned.
     vision_model: Option<String>,
     read_cap: Option<u32>,
+    /// The model writing the notes, or `None` when no profile is assigned
+    /// to text generation.
+    notes_model: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -71,6 +76,7 @@ pub struct MeetingSummary {
     failed: usize,
     keyframes: usize,
     reads: usize,
+    sections: usize,
     error: Option<String>,
 }
 
@@ -175,6 +181,15 @@ pub async fn start_meeting(
             ProviderClient::for_profile(p, &state.keys, &state.http)?.into_text_generator(),
         )),
         _ => None,
+    };
+    // Notes are optional too: without a text-generation profile the meeting
+    // is still transcribed and its screens kept.
+    let writer: Option<(String, Arc<dyn TextGenerator>)> = match settings.assigned(Role::Text) {
+        Some(p) => Some((
+            p.model.clone(),
+            ProviderClient::for_profile(p, &state.keys, &state.http)?.into_text_generator(),
+        )),
+        None => None,
     };
 
     let root = storage::meetings_root().map_err(|e| UiError::new("storage", e.to_string()))?;
@@ -289,6 +304,7 @@ pub async fn start_meeting(
         screen: started.screen.clone(),
         vision_model: vision.as_ref().map(|(model, _)| model.clone()),
         read_cap: capture.screen_read_cap,
+        notes_model: writer.as_ref().map(|(model, _)| model.clone()),
     };
     for (key, value) in [
         ("started_at_unix_ms", info.started_at_unix_ms.to_string()),
@@ -332,8 +348,38 @@ pub async fn start_meeting(
         drop(screen_tx);
     }
 
-    // Owns the timeline: stores lines and keyframes and forwards every event
-    // to the UI.
+    // Notes are fed by the speech and screen events below, plus the session
+    // clock so sections are written during silence too.
+    let (notes_in_tx, notes_in_rx) = mpsc::unbounded_channel::<NotesInput>();
+    let (notes_tx, mut notes_rx) = mpsc::unbounded_channel::<NotesEvent>();
+    let mut notes_in = None;
+    if let Some((_, writer)) = writer {
+        tauri::async_runtime::spawn(notes_stream(
+            SectionConfig::default(),
+            notes_in_rx,
+            writer,
+            notes_tx,
+        ));
+        // Stops by itself once the notes input is closed.
+        let ticks = notes_in_tx.downgrade();
+        tauri::async_runtime::spawn(async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                let Some(tx) = ticks.upgrade() else { break };
+                let now_ms = clock.elapsed().as_millis() as u64;
+                if tx.send(NotesInput::Tick { now_ms }).is_err() {
+                    break;
+                }
+            }
+        });
+        notes_in = Some(notes_in_tx);
+    } else {
+        drop(notes_tx);
+    }
+    let notes_path = dir.join("notes-live.md");
+
+    // Owns the timeline: stores lines, keyframes and notes and forwards
+    // every event to the UI.
     let finished_app = app.clone();
     let summary_dir = info.dir.clone();
     tauri::async_runtime::spawn(async move {
@@ -343,10 +389,16 @@ pub async fn start_meeting(
             failed: 0,
             keyframes: 0,
             reads: 0,
+            sections: 0,
             error: None,
         };
-        let (mut speech_open, mut screen_open) = (true, true);
-        while speech_open || screen_open {
+        let (mut speech_open, mut screen_open, mut notes_open) = (true, true, true);
+        while speech_open || screen_open || notes_open {
+            if !speech_open && !screen_open {
+                // Closes the notes input: the last section is written, then
+                // the notes stream ends.
+                notes_in = None;
+            }
             tokio::select! {
                 event = events_rx.recv(), if speech_open => {
                     let Some(event) = event else {
@@ -363,6 +415,9 @@ pub async fn start_meeting(
                         PipelineEvent::Failed { .. } => summary.failed += 1,
                         _ => {}
                     }
+                    if let Some(tx) = &notes_in {
+                        let _ = tx.send(NotesInput::from_speech(&event));
+                    }
                     let _ = app.emit("meeting-event", &event);
                 }
                 event = screen_rx.recv(), if screen_open => {
@@ -378,7 +433,26 @@ pub async fn start_meeting(
                     if let Err(e) = screen::record(&timeline, &event) {
                         summary.error = Some(format!("Could not save a keyframe: {e}"));
                     }
+                    if let Some(tx) = &notes_in {
+                        let _ = tx.send(NotesInput::from_screen(&event));
+                    }
                     let _ = app.emit("meeting-screen", &event);
+                }
+                event = notes_rx.recv(), if notes_open => {
+                    let Some(event) = event else {
+                        notes_open = false;
+                        continue;
+                    };
+                    if let Err(e) = notes::record(&timeline, &event) {
+                        summary.error = Some(format!("Could not save the notes: {e}"));
+                    }
+                    if let NotesEvent::Section { section, .. } = &event {
+                        summary.sections += 1;
+                        if let Err(e) = notes::append_markdown(&notes_path, section) {
+                            summary.error = Some(format!("Could not write notes-live.md: {e}"));
+                        }
+                    }
+                    let _ = app.emit("meeting-notes", &event);
                 }
             }
         }
@@ -415,9 +489,9 @@ pub async fn start_meeting(
     Ok(info)
 }
 
-/// Stops capture. Transcription of the last utterances and reading of the
-/// last keyframes continue, and `meeting-finished` is emitted when they are
-/// done.
+/// Stops capture. Transcription of the last utterances, reading of the last
+/// keyframes and writing of the last notes section continue, and
+/// `meeting-finished` is emitted when they are done.
 #[tauri::command]
 pub fn stop_meeting(meetings: State<'_, MeetingState>) -> Result<(), UiError> {
     let mut running = meetings.running.lock().unwrap();

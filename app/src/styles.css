@@ -141,8 +141,9 @@ p {
   font-weight: 600;
 }
 
-.page[hidden] {
-  display: none;
+/* `hidden` must win over any display rule set on a class. */
+[hidden] {
+  display: none !important;
 }
 
 /* Meeting */
@@ -260,6 +261,124 @@ p {
   background: var(--warn-soft);
 }
 
+.fixed {
+  margin-left: 8px;
+  font-size: 11px;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 0 5px;
+  white-space: nowrap;
+}
+
+/* Notes / transcript switch */
+
+.seg {
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+  margin-bottom: 12px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+}
+
+.seg-btn {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 5px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.seg-btn[aria-selected="true"] {
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--shadow);
+}
+
+.seg-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* Live notes */
+
+.notes {
+  display: grid;
+  gap: 12px;
+}
+
+.note {
+  padding: 14px 16px;
+}
+
+.note-time {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.note-heading {
+  font-size: 16px;
+  margin: 2px 0 8px;
+  overflow-wrap: anywhere;
+}
+
+.note-body.with-image {
+  display: grid;
+  grid-template-columns: 1fr 220px;
+  gap: 16px;
+  align-items: start;
+}
+
+.note-image {
+  width: 100%;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  display: block;
+}
+
+.note-bullets {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.note-bullets li {
+  overflow-wrap: anywhere;
+}
+
+.tag {
+  font-size: 11px;
+  font-weight: 700;
+  border-radius: 5px;
+  padding: 1px 6px;
+  margin-right: 6px;
+}
+
+.tag.decision {
+  color: var(--ok);
+  background: var(--ok-soft);
+}
+
+.tag.action {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.source {
+  margin-left: 6px;
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
 /* Screen keyframes in the transcript */
 
 .line.shot {
@@ -338,6 +457,9 @@ p {
   }
   .shot-thumb {
     width: 100%;
+  }
+  .note-body.with-image {
+    grid-template-columns: 1fr;
   }
 }
 

@@ -24,15 +24,22 @@
         <h1>Meeting</h1>
         <p>
           Captures your microphone as “Me”, your computer’s sound as “Others”, and the
-          screen you chose in Settings. Speech is transcribed and each new screen is read
-          while the meeting runs. Make sure everyone knows the meeting is being recorded.
+          screen you chose in Settings. Speech is transcribed, each new screen is read, and
+          notes are written section by section while the meeting runs. Make sure everyone
+          knows the meeting is being recorded.
         </p>
       </section>
       <section>
         <div id="meeting-controls" class="card meeting-controls"></div>
       </section>
       <section>
-        <h2>Transcript and screen</h2>
+        <div class="seg" role="tablist" aria-label="Meeting content">
+          <button class="seg-btn" type="button" role="tab" data-pane="notes" aria-selected="false">Notes</button>
+          <button class="seg-btn" type="button" role="tab" data-pane="transcript" aria-selected="true">
+            Transcript and screen
+          </button>
+        </div>
+        <div id="notes" class="notes" hidden></div>
         <div id="transcript" class="card transcript"></div>
       </section>
     </main>

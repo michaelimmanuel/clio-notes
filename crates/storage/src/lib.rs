@@ -111,7 +111,22 @@ impl KeyframeRow {
     }
 }
 
-const SCHEMA_VERSION: i64 = 2;
+/// One section of the live notes.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SectionRow {
+    /// Position in the notes, from 0.
+    pub index: u32,
+    pub start_ms: u64,
+    pub end_ms: u64,
+    pub heading: String,
+    /// The bullets as JSON.
+    pub bullets: String,
+    /// The keyframe shown with the section (its `t_ms`), if any.
+    pub image_t_ms: Option<u64>,
+    pub model: String,
+}
+
+const SCHEMA_VERSION: i64 = 3;
 
 /// The event log of one meeting.
 pub struct Timeline {
@@ -170,7 +185,72 @@ impl Timeline {
                  PRAGMA user_version = 2;",
             )?;
         }
+        if version < 3 {
+            conn.execute_batch(
+                "ALTER TABLE transcript ADD COLUMN corrected TEXT;
+                 CREATE TABLE section (
+                     idx        INTEGER PRIMARY KEY,
+                     start_ms   INTEGER NOT NULL,
+                     end_ms     INTEGER NOT NULL,
+                     heading    TEXT    NOT NULL,
+                     bullets    TEXT    NOT NULL,
+                     image_t_ms INTEGER,
+                     model      TEXT    NOT NULL,
+                     created_at INTEGER NOT NULL
+                 );
+                 PRAGMA user_version = 3;",
+            )?;
+        }
         Ok(Self { conn })
+    }
+
+    /// Stores the corrected spelling of a line. The text as transcribed is
+    /// kept; [`Timeline::transcript`] returns the corrected one.
+    pub fn set_corrected(&self, speaker: &Speaker, start_ms: u64, text: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE transcript SET corrected = ?3 WHERE speaker = ?1 AND start_ms = ?2",
+            params![speaker.as_str(), start_ms as i64, text],
+        )?;
+        Ok(())
+    }
+
+    pub fn add_section(&self, s: &SectionRow) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO section (idx, start_ms, end_ms, heading, bullets, image_t_ms,
+                 model, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                s.index,
+                s.start_ms as i64,
+                s.end_ms as i64,
+                s.heading,
+                s.bullets,
+                s.image_t_ms.map(|t| t as i64),
+                s.model,
+                unix_ms() as i64,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Every notes section, in order.
+    pub fn sections(&self) -> Result<Vec<SectionRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT idx, start_ms, end_ms, heading, bullets, image_t_ms, model
+             FROM section ORDER BY idx",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok(SectionRow {
+                index: r.get(0)?,
+                start_ms: r.get::<_, i64>(1)? as u64,
+                end_ms: r.get::<_, i64>(2)? as u64,
+                heading: r.get(3)?,
+                bullets: r.get(4)?,
+                image_t_ms: r.get::<_, Option<i64>>(5)?.map(|t| t as u64),
+                model: r.get(6)?,
+            })
+        })?;
+        Ok(rows.collect::<std::result::Result<_, _>>()?)
     }
 
     pub fn add_keyframe(&self, k: &KeyframeRow) -> Result<()> {
@@ -254,10 +334,11 @@ impl Timeline {
         Ok(self.conn.last_insert_rowid())
     }
 
-    /// Every line, in the order it was spoken.
+    /// Every line, in the order it was spoken, with corrected spellings
+    /// where there are any.
     pub fn transcript(&self) -> Result<Vec<TranscriptLine>> {
         let mut stmt = self.conn.prepare(
-            "SELECT speaker, start_ms, end_ms, text, model FROM transcript
+            "SELECT speaker, start_ms, end_ms, COALESCE(corrected, text), model FROM transcript
              ORDER BY start_ms, id",
         )?;
         let rows = stmt.query_map([], |r| {
@@ -406,6 +487,37 @@ mod tests {
         b.reading = Some("{}".into());
         b.model = Some("m".into());
         assert_eq!(t.keyframes().unwrap(), vec![a, b]);
+        drop(t);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn sections_and_corrections_round_trip() {
+        let dir = temp_dir("sections");
+        let t = Timeline::open(&dir.join("timeline.sqlite")).unwrap();
+        t.add_transcript(&TranscriptLine {
+            speaker: Speaker::Me,
+            start_ms: 1000,
+            end_ms: 2000,
+            text: "we use cooper netties".into(),
+            model: "m".into(),
+        })
+        .unwrap();
+        t.set_corrected(&Speaker::Me, 1000, "we use Kubernetes")
+            .unwrap();
+        assert_eq!(t.transcript().unwrap()[0].text, "we use Kubernetes");
+
+        let section = SectionRow {
+            index: 0,
+            start_ms: 0,
+            end_ms: 60_000,
+            heading: "Deployment".into(),
+            bullets: "[]".into(),
+            image_t_ms: Some(1000),
+            model: "m".into(),
+        };
+        t.add_section(&section).unwrap();
+        assert_eq!(t.sections().unwrap(), vec![section]);
         drop(t);
         std::fs::remove_dir_all(dir).unwrap();
     }

@@ -3,8 +3,9 @@
 //! Plays `mic.wav` (as "Me"), `system.wav` (as "Others") and the screen
 //! frames from a fixture folder in real time or faster. Audio is transcribed
 //! with the speech-to-text profile from Settings; frames go through keyframe
-//! selection and screen reading. Prints events as they arrive and stores the
-//! result in a timeline database, with keyframe images next to it.
+//! selection and screen reading, and both feed the live notes. Prints
+//! events as they arrive and stores the result in a timeline database, with
+//! keyframe images and `notes-live.md` next to it.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -12,10 +13,11 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use clap::Parser;
+use pipeline::notes::{self, section_markdown};
 use pipeline::screen::{self, SkipReason};
 use pipeline::{
-    Frame, PipelineEvent, ScreenEvent, ScreenMode, ScreenOptions, StreamOptions, screen_stream,
-    transcribe_stream,
+    Frame, NotesEvent, NotesInput, PipelineEvent, ScreenEvent, ScreenMode, ScreenOptions,
+    SectionConfig, StreamOptions, notes_stream, screen_stream, transcribe_stream,
 };
 use providers::{
     ProviderClient, Role, Settings, SettingsStore, SystemKeyStore, TextGenerator, http_client,
@@ -57,6 +59,15 @@ struct Cli {
     /// Screen-reading profile to use instead of the one assigned in Settings.
     #[arg(long)]
     vision_profile: Option<String>,
+    /// Do not write notes.
+    #[arg(long)]
+    no_notes: bool,
+    /// Text-generation profile to use instead of the one assigned in Settings.
+    #[arg(long)]
+    text_profile: Option<String>,
+    /// Longest notes section, in seconds, when the screen does not change.
+    #[arg(long)]
+    section_max_s: Option<u64>,
     /// Timeline database to write. Default: <fixture>/timeline.sqlite,
     /// replaced on each run, with keyframe images in a `keyframes` folder
     /// next to it.
@@ -116,6 +127,8 @@ async fn run(cli: Cli) -> Result<(), String> {
     if !frames.is_empty() {
         let _ = std::fs::remove_dir_all(out_dir.join("keyframes"));
     }
+    let notes_path = out_dir.join("notes-live.md");
+    let _ = std::fs::remove_file(&notes_path);
     let timeline = Timeline::open(&db_path).map_err(|e| e.to_string())?;
     timeline
         .set_meta("source", &cli.fixture.display().to_string())
@@ -198,7 +211,7 @@ async fn run(cli: Cli) -> Result<(), String> {
         let reader = if cli.no_read {
             None
         } else {
-            vision_reader(&settings, cli.vision_profile.as_deref())?
+            generator(&settings, cli.vision_profile.as_deref(), Role::Vision)?
         };
         let mode = if cli.screen_mode == "slides" {
             ScreenMode::Slides
@@ -259,21 +272,87 @@ async fn run(cli: Cli) -> Result<(), String> {
         drop(screen_tx);
     }
 
+    // Notes are fed by both streams and end after both have ended.
+    let (notes_in_tx, notes_in_rx) = mpsc::unbounded_channel();
+    let (notes_tx, mut notes_rx) = mpsc::unbounded_channel();
+    let writer = if cli.no_notes {
+        None
+    } else {
+        generator(&settings, cli.text_profile.as_deref(), Role::Text)?
+    };
+    match &writer {
+        Some(w) => eprintln!("  Notes  writing with {} ({})", w.name, w.model),
+        None if cli.no_notes => eprintln!("  Notes  off"),
+        None => eprintln!("  Notes  off: no text-generation profile assigned"),
+    }
+    let mut notes_in = None;
+    if let Some(w) = writer {
+        let mut cfg = SectionConfig::default();
+        if let Some(s) = cli.section_max_s {
+            cfg.max_ms = s * 1000;
+            cfg.min_ms = cfg.min_ms.min(cfg.max_ms);
+        }
+        workers.push(tokio::spawn(notes_stream(
+            cfg,
+            notes_in_rx,
+            w.generator,
+            notes_tx,
+        )));
+        if cli.speed > 0.0 {
+            // The session clock, so sections are written while playback runs.
+            // It stops by itself once the notes input is closed.
+            let (ticks, speed) = (notes_in_tx.downgrade(), cli.speed);
+            tokio::spawn(async move {
+                loop {
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+                    let Some(tx) = ticks.upgrade() else { break };
+                    let now_ms = (started.elapsed().as_secs_f64() * speed * 1000.0) as u64;
+                    if tx.send(NotesInput::Tick { now_ms }).is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+        notes_in = Some(notes_in_tx);
+    } else {
+        drop(notes_tx);
+    }
+
     let mut stats = Stats::default();
-    let (mut speech_open, mut screen_open) = (true, true);
-    while speech_open || screen_open {
+    let (mut speech_open, mut screen_open, mut notes_open) = (true, true, true);
+    while speech_open || screen_open || notes_open {
         tokio::select! {
             event = speech_rx.recv(), if speech_open => match event {
-                Some(event) => speech_event(event, &timeline, &mut stats)?,
+                Some(event) => {
+                    if let Some(tx) = &notes_in {
+                        let _ = tx.send(NotesInput::from_speech(&event));
+                    }
+                    speech_event(event, &timeline, &mut stats)?;
+                }
                 None => speech_open = false,
             },
             event = screen_rx.recv(), if screen_open => match event {
                 Some(event) => {
+                    if let Some(tx) = &notes_in {
+                        let _ = tx.send(NotesInput::from_screen(&event));
+                    }
                     screen::record(&timeline, &event).map_err(|e| e.to_string())?;
                     screen_event(event, &mut stats, cli.no_read);
                 }
                 None => screen_open = false,
             },
+            event = notes_rx.recv(), if notes_open => match event {
+                Some(event) => {
+                    notes::record(&timeline, &event).map_err(|e| e.to_string())?;
+                    notes_event(event, &mut stats, &notes_path);
+                }
+                None => notes_open = false,
+            },
+        }
+        if !speech_open && !screen_open {
+            // Closes the notes input: the last section is written, then the
+            // notes stream ends.
+            notes_in = None;
         }
     }
     for w in workers {
@@ -307,6 +386,21 @@ async fn run(cli: Cli) -> Result<(), String> {
             percentile(&mut stats.read_latencies, 1.0),
             stats.tokens_in,
             stats.tokens_out,
+        );
+    }
+    if stats.sections + stats.sections_empty + stats.sections_failed > 0 {
+        eprintln!(
+            "Notes: {} sections written, {} with nothing to note, {} failed. Lines corrected: {}. \
+             Write latency: median {}, max {}. Tokens: {} in, {} out. Notes: {}",
+            stats.sections,
+            stats.sections_empty,
+            stats.sections_failed,
+            stats.corrections,
+            percentile(&mut stats.write_latencies, 0.5),
+            percentile(&mut stats.write_latencies, 1.0),
+            stats.notes_tokens_in,
+            stats.notes_tokens_out,
+            notes_path.display(),
         );
     }
     eprintln!(
@@ -422,6 +516,55 @@ fn screen_event(event: ScreenEvent, stats: &mut Stats, quiet_skips: bool) {
     }
 }
 
+fn notes_event(event: NotesEvent, stats: &mut Stats, notes_path: &Path) {
+    match event {
+        NotesEvent::Writing { .. } => {}
+        NotesEvent::Section {
+            section,
+            usage,
+            latency_ms,
+        } => {
+            stats.sections += 1;
+            stats.write_latencies.push(latency_ms);
+            stats.notes_tokens_in += usage.input_tokens;
+            stats.notes_tokens_out += usage.output_tokens;
+            println!(
+                "{} Notes  section {} written ({:.1} s):",
+                at(section.start_ms),
+                section.index + 1,
+                latency_ms as f64 / 1000.0
+            );
+            for line in section_markdown(&section).lines() {
+                println!("    {line}");
+            }
+            if let Err(e) = notes::append_markdown(notes_path, &section) {
+                eprintln!("cannot write {}: {e}", notes_path.display());
+            }
+        }
+        NotesEvent::Empty { index } => {
+            stats.sections_empty += 1;
+            println!(
+                "            Notes  section {} had nothing to note",
+                index + 1
+            );
+        }
+        NotesEvent::Failed {
+            start_ms, message, ..
+        } => {
+            stats.sections_failed += 1;
+            println!("{} Notes  !! {message}", at(start_ms));
+        }
+        NotesEvent::Corrected {
+            speaker,
+            start_ms,
+            text,
+        } => {
+            stats.corrections += 1;
+            println!("{} {:<6} corrected: {text}", at(start_ms), speaker.label());
+        }
+    }
+}
+
 fn at(t_ms: u64) -> String {
     format!("[{:>7.2}s]", t_ms as f64 / 1000.0)
 }
@@ -440,15 +583,19 @@ struct Reader {
     generator: Arc<dyn TextGenerator>,
 }
 
-/// The screen-reading generator, if a profile is named or assigned.
-fn vision_reader(settings: &Settings, name: Option<&str>) -> Result<Option<Reader>, String> {
+/// The generator for `role`, if a profile is named or assigned.
+fn generator(
+    settings: &Settings,
+    name: Option<&str>,
+    role: Role,
+) -> Result<Option<Reader>, String> {
     let profile = match name {
         Some(name) => Some(
             settings
                 .profile(name)
                 .ok_or_else(|| format!("No profile named \"{name}\"."))?,
         ),
-        None => settings.assigned(Role::Vision),
+        None => settings.assigned(role),
     };
     let Some(profile) = profile else {
         return Ok(None);
@@ -495,6 +642,13 @@ struct Stats {
     read_latencies: Vec<u64>,
     tokens_in: u64,
     tokens_out: u64,
+    sections: usize,
+    sections_empty: usize,
+    sections_failed: usize,
+    corrections: usize,
+    write_latencies: Vec<u64>,
+    notes_tokens_in: u64,
+    notes_tokens_out: u64,
 }
 
 /// Reads a WAV file as mono f32, averaging channels.

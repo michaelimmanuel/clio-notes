@@ -1,5 +1,6 @@
-// The meeting view: start and stop a meeting and watch the live transcript,
-// with screen keyframes placed where they appeared.
+// The meeting view: start and stop a meeting, watch the live transcript with
+// screen keyframes placed where they appeared, and read the notes as each
+// section is written.
 
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -47,6 +48,29 @@ type ScreenEvent =
   | { type: "read_skipped"; t_ms: number; reason: SkipReason }
   | { type: "read_failed"; t_ms: number; message: string };
 
+interface Bullet {
+  text: string;
+  source: "spoken" | "screen" | "both";
+  kind: "point" | "decision" | "action";
+}
+
+interface Section {
+  index: number;
+  start_ms: number;
+  end_ms: number;
+  heading: string;
+  bullets: Bullet[];
+  image: { t_ms: number; file: string } | null;
+  model: string;
+}
+
+type NotesEvent =
+  | { type: "writing"; index: number; start_ms: number; end_ms: number }
+  | { type: "section"; section: Section; latency_ms: number }
+  | { type: "empty"; index: number }
+  | { type: "failed"; index: number; start_ms: number; end_ms: number; message: string }
+  | { type: "corrected"; speaker: Speaker; start_ms: number; text: string };
+
 interface MeetingInfo {
   dir: string;
   started_at_unix_ms: number;
@@ -56,6 +80,7 @@ interface MeetingInfo {
   screen: string | null;
   vision_model: string | null;
   read_cap: number | null;
+  notes_model: string | null;
 }
 
 interface MeetingStatus {
@@ -70,6 +95,7 @@ interface MeetingSummary {
   failed: number;
   keyframes: number;
   reads: number;
+  sections: number;
   error: string | null;
 }
 
@@ -88,7 +114,20 @@ interface Row {
   state: "pending" | "done" | "failed";
   text: string;
   latency_ms?: number;
+  /// A term's spelling was fixed from the screen.
+  corrected?: boolean;
 }
+
+interface NoteCard {
+  index: number;
+  start_ms: number;
+  end_ms: number;
+  state: "writing" | "done" | "failed";
+  section?: Section;
+  message?: string;
+}
+
+type Pane = "notes" | "transcript";
 
 interface Shot {
   t_ms: number;
@@ -105,7 +144,11 @@ let speechLabel: string | null = null;
 let lastSummary: MeetingSummary | null = null;
 const rows = new Map<string, Row>();
 const shots = new Map<number, Shot>();
+const notes = new Map<number, NoteCard>();
 let readsUsed = 0;
+let pane: Pane = "transcript";
+/// The notes model of the meeting on screen, kept after it ends.
+let notesModel: string | null = null;
 let timer: number | undefined;
 
 const SKIP_NOTE: Record<SkipReason, string> = {
@@ -179,6 +222,10 @@ function renderControls() {
         meeting.screen
           ? `Screen: ${meeting.screen} · ${screenCounts()}`
           : "Screen: not captured (turned off in Settings)",
+        h("br"),
+        meeting.notes_model
+          ? `Notes: ${writtenSections()} section${writtenSections() === 1 ? "" : "s"} written (${meeting.notes_model})`
+          : "Notes: off. Assign a profile to text generation in Settings to get notes.",
       )
     : lastSummary
       ? h(
@@ -186,11 +233,16 @@ function renderControls() {
           { class: lastSummary.error ? "result err" : "fineprint" },
           lastSummary.error ??
             `Last meeting: ${lastSummary.lines} lines${lastSummary.failed ? ` (${lastSummary.failed} failed)` : ""}, ` +
-              `${lastSummary.keyframes} keyframes, ${lastSummary.reads} read. Saved in ${lastSummary.dir}`,
+              `${lastSummary.keyframes} keyframes (${lastSummary.reads} read), ` +
+              `${lastSummary.sections} notes section${lastSummary.sections === 1 ? "" : "s"}. Saved in ${lastSummary.dir}`,
         )
       : null;
 
   slot.replaceChildren(h("div", { class: "row-between" }, status, button), ...(details ? [details] : []));
+}
+
+function writtenSections(): number {
+  return [...notes.values()].filter((n) => n.state === "done").length;
 }
 
 function screenCounts(): string {
@@ -207,7 +259,14 @@ function lineView(r: Row): HTMLElement {
     { class: `line ${r.state}` },
     h("span", { class: "line-time mono" }, clock(r.start_ms)),
     h("span", { class: `speaker ${r.speaker}` }, SPEAKER_LABEL[r.speaker]),
-    h("span", { class: "line-text" }, r.state === "pending" ? "…" : r.text),
+    h(
+      "span",
+      { class: "line-text" },
+      r.state === "pending" ? "…" : r.text,
+      r.corrected
+        ? h("span", { class: "fixed", title: "A term in this line was respelled as it appears on screen." }, "corrected")
+        : null,
+    ),
   );
 }
 
@@ -271,9 +330,100 @@ function renderTranscript() {
   if (nearBottom && phase !== "idle") window.scrollTo({ top: document.body.scrollHeight });
 }
 
+const BULLET_LABEL: Record<Bullet["kind"], string | null> = {
+  point: null,
+  decision: "Decision",
+  action: "Action",
+};
+
+const SOURCE_LABEL: Record<Bullet["source"], string | null> = {
+  spoken: null,
+  screen: "on screen",
+  both: "said and shown",
+};
+
+function noteView(n: NoteCard): HTMLElement {
+  const range = `${clock(n.start_ms)} – ${clock(n.end_ms)}`;
+  if (n.state !== "done" || !n.section) {
+    return h(
+      "div",
+      { class: `card note ${n.state}` },
+      h("div", { class: "note-time mono" }, range),
+      h(
+        "div",
+        { class: `shot-note ${n.state === "failed" ? "err" : ""}` },
+        n.state === "writing" ? "Writing this section…" : `Not written: ${n.message ?? ""}`,
+      ),
+    );
+  }
+  const s = n.section;
+  const thumbnail = s.image ? shots.get(s.image.t_ms)?.thumbnail : undefined;
+  return h(
+    "div",
+    { class: "card note" },
+    h("div", { class: "note-time mono" }, range),
+    h("h3", { class: "note-heading" }, s.heading),
+    h(
+      "div",
+      { class: thumbnail ? "note-body with-image" : "note-body" },
+      h(
+        "ul",
+        { class: "note-bullets" },
+        ...s.bullets.map((b) =>
+          h(
+            "li",
+            { class: b.kind },
+            BULLET_LABEL[b.kind] ? h("span", { class: `tag ${b.kind}` }, BULLET_LABEL[b.kind]!) : null,
+            b.text,
+            SOURCE_LABEL[b.source] ? h("span", { class: "source" }, SOURCE_LABEL[b.source]!) : null,
+          ),
+        ),
+      ),
+      thumbnail ? h("img", { class: "note-image", src: thumbnail, alt: `Screen at ${clock(s.image!.t_ms)}` }) : null,
+    ),
+  );
+}
+
+function renderNotes() {
+  const list = $("notes");
+  const nearBottom = window.innerHeight + window.scrollY >= document.body.scrollHeight - 80;
+  const sorted = [...notes.values()].sort((a, b) => a.index - b.index);
+  if (sorted.length === 0) {
+    const off = phase !== "idle" && meeting !== null && !meeting.notes_model;
+    list.replaceChildren(
+      h(
+        "div",
+        { class: "card empty" },
+        off || (phase === "idle" && rows.size > 0 && !notesModel)
+          ? "Notes are off. Assign a profile to text generation in Settings to get notes."
+          : phase === "idle"
+            ? "Notes appear here section by section while the meeting runs."
+            : "The first section appears shortly after the first topic or slide ends, or after three minutes.",
+      ),
+    );
+  } else {
+    list.replaceChildren(...sorted.map(noteView));
+    if (nearBottom && phase !== "idle" && pane === "notes") window.scrollTo({ top: document.body.scrollHeight });
+  }
+  const count = writtenSections();
+  for (const btn of document.querySelectorAll<HTMLButtonElement>(".seg-btn")) {
+    if (btn.dataset.pane === "notes") btn.textContent = count ? `Notes · ${count}` : "Notes";
+  }
+}
+
+function showPane(next: Pane) {
+  pane = next;
+  $("notes").hidden = pane !== "notes";
+  $("transcript").hidden = pane !== "transcript";
+  for (const btn of document.querySelectorAll<HTMLButtonElement>(".seg-btn")) {
+    btn.setAttribute("aria-selected", String(btn.dataset.pane === pane));
+  }
+}
+
 function render() {
   renderControls();
   renderTranscript();
+  renderNotes();
 }
 
 // ---- Actions ----
@@ -292,11 +442,13 @@ async function start() {
   phase = "starting";
   rows.clear();
   shots.clear();
+  notes.clear();
   readsUsed = 0;
   lastSummary = null;
   render();
   try {
     meeting = await invoke<MeetingInfo>("start_meeting");
+    notesModel = meeting.notes_model;
     phase = "running";
     timer = window.setInterval(renderControls, 1000);
   } catch (e) {
@@ -373,6 +525,36 @@ function onScreen(e: ScreenEvent) {
   renderControls();
 }
 
+function onNotes(e: NotesEvent) {
+  if (e.type === "corrected") {
+    const row = rows.get(rowKey(e.speaker, e.start_ms));
+    if (row) {
+      row.text = e.text;
+      row.corrected = true;
+    }
+    renderTranscript();
+    return;
+  }
+  if (e.type === "writing") {
+    notes.set(e.index, { index: e.index, start_ms: e.start_ms, end_ms: e.end_ms, state: "writing" });
+  } else if (e.type === "section") {
+    const s = e.section;
+    notes.set(s.index, { index: s.index, start_ms: s.start_ms, end_ms: s.end_ms, state: "done", section: s });
+  } else if (e.type === "empty") {
+    notes.delete(e.index);
+  } else {
+    notes.set(e.index, {
+      index: e.index,
+      start_ms: e.start_ms,
+      end_ms: e.end_ms,
+      state: "failed",
+      message: e.message,
+    });
+  }
+  renderNotes();
+  renderControls();
+}
+
 function onFinished(summary: MeetingSummary) {
   window.clearInterval(timer);
   phase = "idle";
@@ -380,7 +562,10 @@ function onFinished(summary: MeetingSummary) {
   lastSummary = summary;
   render();
   if (summary.error) toast(summary.error, true);
-  else toast(`Meeting saved: ${summary.lines} lines, ${summary.keyframes} keyframes`);
+  else
+    toast(
+      `Meeting saved: ${summary.lines} lines, ${summary.keyframes} keyframes, ${summary.sections} notes sections`,
+    );
 }
 
 // ---- Views ----
@@ -411,12 +596,17 @@ export async function initMeeting() {
   }
   await listen<PipelineEvent>("meeting-event", (e) => onEvent(e.payload));
   await listen<ScreenEvent>("meeting-screen", (e) => onScreen(e.payload));
+  await listen<NotesEvent>("meeting-notes", (e) => onNotes(e.payload));
+  for (const btn of document.querySelectorAll<HTMLButtonElement>(".seg-btn")) {
+    btn.addEventListener("click", () => showPane(btn.dataset.pane as Pane));
+  }
   await listen<MeetingSummary>("meeting-finished", (e) => onFinished(e.payload));
 
   // The window may have been reloaded while a meeting runs.
   const status = await invoke<MeetingStatus>("meeting_status");
   if (status.meeting) {
     meeting = status.meeting;
+    notesModel = meeting.notes_model;
     phase = status.stopping ? "stopping" : "running";
     timer = window.setInterval(renderControls, 1000);
   }
