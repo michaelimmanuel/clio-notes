@@ -13,3 +13,6 @@ providers.workspace = true
 clap = { version = "4.6.7", features = ["derive"] }
 hound = "3.5.1"
 tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+image = { version = "0.25.10", default-features = false, features = ["png"] }
+serde_json = "1.0.154"
+serde = { version = "1.0.229", features = ["derive"] }

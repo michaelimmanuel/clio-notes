@@ -148,12 +148,28 @@ speaker identification"). Chunked transcription is good enough to build on until
 
 ### M3 — Screen pipeline
 
-- [ ] Change detection on downscaled frames (perceptual hash), with a tunable threshold
-- [ ] Two modes: slide (one keyframe per change) and continuous (sample and deduplicate)
-- [ ] Keep full-resolution keyframes as image files; record them in the timeline
-- [ ] Vision extraction to a fixed schema: title, text, tables, chart readings, code, notable terms
-- [ ] Backpressure: drop intermediate keyframes when extraction falls behind
-- [ ] Per-meeting cap on vision calls, visible in the UI
+- [x] Settings > Recording: choose the microphone and the display to capture (`capture.json`
+      next to `providers.json`; system audio stays on the default output)
+- [x] Change detection on a 128 × 72 brightness grid of each frame (1 fps), with tunable
+      thresholds (`KeyframeConfig`). A change is taken once the screen holds still; cells that
+      keep changing (webcam tiles, clocks, playing video) are ignored
+- [x] Two modes: "Slides only" (settled screens) and "Slides and demos" (also samples a moving
+      screen at most every 10 s). Small edits are batched; going back to an earlier screen is
+      recorded as a repeat, with no new image or reading
+- [x] Full-resolution keyframes in `keyframes/<t_ms>.png`; timeline schema v2 adds a `keyframe`
+      table (v1 files are upgraded)
+- [x] Screen reading to a fixed schema: kind, title, text, tables, charts, code, terms, summary
+      (strict JSON schema, validated, retried once)
+- [x] Backpressure: up to 3 readings in flight; when full, only the newest waiting keyframe is
+      kept and older waiting ones are saved but not read
+- [x] Per-meeting cap on screen readings (default 60, set in Settings), shown in the Meeting tab
+- [x] Meeting tab shows keyframes in the transcript where they appeared; the app's own window
+      is hidden from screen capture during a meeting
+- [x] `replay` plays the frames too: `--only screen`, `--no-read`, `--screen-mode slides`
+- [ ] Exit check on a slide-deck fixture and a demo fixture (record both with `record`)
+
+Measured on the 59 s desktop fixture in real time: 7 keyframes from 59 frames, all read,
+median 10.7 s per reading, about 2.9k input and 1.0k output tokens per screen (gpt-6-luna).
 
 **Exit check:** on a slide-deck fixture, there is exactly one keyframe per slide; on a demo
 fixture, the keyframe count stays under the cap and no important screen is missed.

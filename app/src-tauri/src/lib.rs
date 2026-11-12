@@ -1,3 +1,4 @@
+mod devices;
 mod meeting;
 mod settings;
 
@@ -15,6 +16,8 @@ pub fn run() {
             settings::assign_role,
             settings::test_profile,
             settings::list_models,
+            devices::get_devices,
+            devices::set_capture_devices,
             meeting::start_meeting,
             meeting::stop_meeting,
             meeting::meeting_status,

@@ -6,4 +6,4 @@ pub mod screen;
 
 pub use audio::{AudioRecorder, AudioSource, AudioStats, AudioTap};
 pub use clock::SessionClock;
-pub use screen::{ScreenRecorder, ScreenStats, ScreenTarget};
+pub use screen::{ScreenRecorder, ScreenStats, ScreenTap, ScreenTarget};

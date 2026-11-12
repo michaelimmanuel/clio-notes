@@ -101,6 +101,10 @@ pub struct ScreenStats {
     pub avg_encode_ms: u64,
 }
 
+/// Receives each frame with its session time in ms. Called on the capture
+/// thread, so it should hand the frame off rather than process it there.
+pub type ScreenTap = Box<dyn FnMut(u64, image::RgbaImage) + Send>;
+
 /// A running screen capture. Call [`ScreenRecorder::stop`] to end it.
 pub struct ScreenRecorder {
     stop: Arc<AtomicBool>,
@@ -179,7 +183,20 @@ fn resolve(target: &ScreenTarget) -> Result<(Source, String)> {
 }
 
 impl ScreenRecorder {
+    /// Captures `target` at `fps` into `<dir>/frames/`.
     pub fn start(target: ScreenTarget, dir: &Path, fps: f64, clock: SessionClock) -> Result<Self> {
+        Self::start_with_tap(target, Some(dir), fps, clock, None)
+    }
+
+    /// Like [`ScreenRecorder::start`], and also hands every frame to `tap`.
+    /// With `dir` set to `None`, frames are not written to disk at all.
+    pub fn start_with_tap(
+        target: ScreenTarget,
+        dir: Option<&Path>,
+        fps: f64,
+        clock: SessionClock,
+        tap: Option<ScreenTap>,
+    ) -> Result<Self> {
         if !(0.1..=10.0).contains(&fps) {
             bail!("fps must be between 0.1 and 10");
         }
@@ -187,9 +204,15 @@ impl ScreenRecorder {
         // The capture thread resolves again because xcap handles are not Send.
         let (_, target_name) = resolve(&target)?;
 
-        let frames_dir = dir.join("frames");
-        fs::create_dir_all(&frames_dir)?;
-        let index = BufWriter::new(File::create(dir.join("frames.jsonl"))?);
+        let output = match dir {
+            Some(dir) => {
+                let frames_dir = dir.join("frames");
+                fs::create_dir_all(&frames_dir)?;
+                let index = BufWriter::new(File::create(dir.join("frames.jsonl"))?);
+                Some((frames_dir, index))
+            }
+            None => None,
+        };
 
         let stop = Arc::new(AtomicBool::new(false));
         let thread = {
@@ -197,7 +220,7 @@ impl ScreenRecorder {
             let name = target_name.clone();
             std::thread::Builder::new()
                 .name("screen-capture".into())
-                .spawn(move || capture_loop(target, name, frames_dir, index, fps, clock, stop))?
+                .spawn(move || capture_loop(target, name, output, tap, fps, clock, stop))?
         };
         Ok(Self {
             stop,
@@ -221,8 +244,8 @@ impl ScreenRecorder {
 fn capture_loop(
     target: ScreenTarget,
     target_name: String,
-    frames_dir: PathBuf,
-    mut index: BufWriter<File>,
+    mut output: Option<(PathBuf, BufWriter<File>)>,
+    mut tap: Option<ScreenTap>,
     fps: f64,
     clock: SessionClock,
     stop: Arc<AtomicBool>,
@@ -267,26 +290,34 @@ fn capture_loop(
         last_error.clear();
 
         let t_ms = t.as_millis() as u64;
-        let file = format!("frames/{t_ms:09}.png");
-        let encode_start = Instant::now();
-        image
-            .save(frames_dir.join(format!("{t_ms:09}.png")))
-            .with_context(|| format!("cannot write {file}"))?;
-        encode_total += encode_start.elapsed();
         grab_total += grab;
         frames += 1;
+        if let Some((frames_dir, index)) = output.as_mut() {
+            let file = format!("frames/{t_ms:09}.png");
+            let encode_start = Instant::now();
+            image
+                .save(frames_dir.join(format!("{t_ms:09}.png")))
+                .with_context(|| format!("cannot write {file}"))?;
+            encode_total += encode_start.elapsed();
 
-        let record = FrameRecord {
-            t_ms,
-            file: &file,
-            width: image.width(),
-            height: image.height(),
-            grab_ms: grab.as_millis() as u64,
-        };
-        serde_json::to_writer(&mut index, &record)?;
-        index.write_all(b"\n")?;
-        // Flush per frame so an interrupted session keeps its index.
-        index.flush()?;
+            let record = FrameRecord {
+                t_ms,
+                file: &file,
+                width: image.width(),
+                height: image.height(),
+                grab_ms: grab.as_millis() as u64,
+            };
+            serde_json::to_writer(&mut *index, &record)?;
+            index.write_all(
+                b"
+",
+            )?;
+            // Flush per frame so an interrupted session keeps its index.
+            index.flush()?;
+        }
+        if let Some(tap) = tap.as_mut() {
+            tap(t_ms, image);
+        }
     }
 
     let avg = |total: Duration| total.as_millis() as u64 / frames.max(1);

@@ -272,6 +272,13 @@ fn find_device(
         AudioSource::SystemAudio => host.output_devices()?.collect(),
     };
     let needle = wanted.to_lowercase();
+    // An exact name wins, so "Mic" can be chosen even when "Mic 2" exists.
+    if let Some(i) = devices
+        .iter()
+        .position(|d| d.to_string().to_lowercase() == needle)
+    {
+        return Ok(devices.into_iter().nth(i).unwrap());
+    }
     let mut matches: Vec<_> = devices
         .into_iter()
         .filter(|d| d.to_string().to_lowercase().contains(&needle))

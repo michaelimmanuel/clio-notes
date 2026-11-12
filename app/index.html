@@ -23,31 +23,43 @@
       <section class="intro">
         <h1>Meeting</h1>
         <p>
-          Captures your microphone as “Me” and your computer’s sound as “Others”, and
-          transcribes both while the meeting runs. Make sure everyone knows the meeting is
-          being recorded.
+          Captures your microphone as “Me”, your computer’s sound as “Others”, and the
+          screen you chose in Settings. Speech is transcribed and each new screen is read
+          while the meeting runs. Make sure everyone knows the meeting is being recorded.
         </p>
       </section>
       <section>
         <div id="meeting-controls" class="card meeting-controls"></div>
       </section>
       <section>
-        <h2>Transcript</h2>
+        <h2>Transcript and screen</h2>
         <div id="transcript" class="card transcript"></div>
       </section>
     </main>
 
     <main class="page" id="view-settings" hidden>
       <section class="intro">
-        <h1>AI providers</h1>
-        <p>
-          Clio Notes runs on your own API keys. Each job below uses one provider
-          profile. Keys are kept in Windows Credential Manager, never in files.
+        <h1>Settings</h1>
+        <p>Choose what to record and which AI providers do the work.</p>
+      </section>
+
+      <section>
+        <div class="row-between">
+          <h2>Recording</h2>
+          <button id="refresh-devices" class="btn" type="button">Refresh list</button>
+        </div>
+        <div id="devices" class="card roles"></div>
+        <p class="fineprint">
+          System audio (“Others”) is always taken from your default speakers or headphones.
         </p>
       </section>
 
       <section>
         <h2>Jobs</h2>
+        <p class="section-desc">
+          Clio Notes runs on your own API keys. Each job uses one provider profile. Keys are
+          kept in Windows Credential Manager, never in files.
+        </p>
         <div id="roles" class="card roles"></div>
       </section>
 

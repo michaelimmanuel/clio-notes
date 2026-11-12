@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { $, errorText, h, toast } from "./dom";
+import { initDevices } from "./devices";
 import { initMeeting } from "./meeting";
 
 // ---- Types mirrored from app/src-tauri/src/settings.rs ----
@@ -532,8 +533,10 @@ window.addEventListener("DOMContentLoaded", async () => {
       );
     $("profiles").replaceChildren(notice());
     $("meeting-controls").replaceChildren(notice());
+    $("devices").replaceChildren(notice());
     return;
   }
+  initDevices();
   initMeeting().catch((e) => toast(`Could not set up the meeting view: ${errorText(e)}`, true));
   try {
     settings = await invoke<SettingsView>("get_settings");

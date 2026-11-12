@@ -1,4 +1,4 @@
-//! SQLite timeline, keyframe image files and notes export.
+//! SQLite timeline of a meeting: transcript lines and screen keyframes.
 //!
 //! Each meeting lives in its own folder (`meetings/meeting-<unix seconds>/`)
 //! holding `timeline.sqlite`, the recorded audio and, later, images and notes.
@@ -70,7 +70,48 @@ pub struct TranscriptLine {
     pub model: String,
 }
 
-const SCHEMA_VERSION: i64 = 1;
+/// One keyframe: a screen state worth keeping, and what was read from it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct KeyframeRow {
+    /// Session time when this screen first appeared.
+    pub t_ms: u64,
+    /// Image path relative to the meeting folder.
+    pub file: String,
+    pub width: u32,
+    pub height: u32,
+    /// first, settled or moving.
+    pub reason: String,
+    /// Share of the screen that changed from the previous keyframe (0–1).
+    pub change: f64,
+    /// Set when the screen returned to the keyframe from this time.
+    pub repeat_of: Option<u64>,
+    /// pending, read, failed, or a skipped_* reason.
+    pub read_status: String,
+    /// The screen reading as JSON, once read.
+    pub reading: Option<String>,
+    pub model: Option<String>,
+    pub read_error: Option<String>,
+}
+
+impl KeyframeRow {
+    pub fn new(t_ms: u64, file: &str, width: u32, height: u32, reason: &str, change: f64) -> Self {
+        Self {
+            t_ms,
+            file: file.into(),
+            width,
+            height,
+            reason: reason.into(),
+            change,
+            repeat_of: None,
+            read_status: "pending".into(),
+            reading: None,
+            model: None,
+            read_error: None,
+        }
+    }
+}
+
+const SCHEMA_VERSION: i64 = 2;
 
 /// The event log of one meeting.
 pub struct Timeline {
@@ -110,7 +151,91 @@ impl Timeline {
                  PRAGMA user_version = 1;",
             )?;
         }
+        if version < 2 {
+            conn.execute_batch(
+                "CREATE TABLE keyframe (
+                     t_ms        INTEGER PRIMARY KEY,
+                     file        TEXT    NOT NULL,
+                     width       INTEGER NOT NULL,
+                     height      INTEGER NOT NULL,
+                     reason      TEXT    NOT NULL,
+                     change      REAL    NOT NULL,
+                     repeat_of   INTEGER,
+                     read_status TEXT    NOT NULL,
+                     reading     TEXT,
+                     model       TEXT,
+                     read_error  TEXT,
+                     created_at  INTEGER NOT NULL
+                 );
+                 PRAGMA user_version = 2;",
+            )?;
+        }
         Ok(Self { conn })
+    }
+
+    pub fn add_keyframe(&self, k: &KeyframeRow) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO keyframe (t_ms, file, width, height, reason, change, repeat_of,
+                 read_status, reading, model, read_error, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            params![
+                k.t_ms as i64,
+                k.file,
+                k.width,
+                k.height,
+                k.reason,
+                k.change,
+                k.repeat_of.map(|t| t as i64),
+                k.read_status,
+                k.reading,
+                k.model,
+                k.read_error,
+                unix_ms() as i64,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Records the outcome of reading the keyframe at `t_ms`.
+    pub fn set_keyframe_read(
+        &self,
+        t_ms: u64,
+        status: &str,
+        reading: Option<&str>,
+        model: Option<&str>,
+        error: Option<&str>,
+    ) -> Result<()> {
+        self.conn.execute(
+            "UPDATE keyframe SET read_status = ?2, reading = ?3, model = ?4, read_error = ?5
+             WHERE t_ms = ?1",
+            params![t_ms as i64, status, reading, model, error],
+        )?;
+        Ok(())
+    }
+
+    /// Every keyframe, in time order.
+    pub fn keyframes(&self) -> Result<Vec<KeyframeRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT t_ms, file, width, height, reason, change, repeat_of, read_status, reading,
+                    model, read_error
+             FROM keyframe ORDER BY t_ms",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok(KeyframeRow {
+                t_ms: r.get::<_, i64>(0)? as u64,
+                file: r.get(1)?,
+                width: r.get(2)?,
+                height: r.get(3)?,
+                reason: r.get(4)?,
+                change: r.get(5)?,
+                repeat_of: r.get::<_, Option<i64>>(6)?.map(|t| t as u64),
+                read_status: r.get(7)?,
+                reading: r.get(8)?,
+                model: r.get(9)?,
+                read_error: r.get(10)?,
+            })
+        })?;
+        Ok(rows.collect::<std::result::Result<_, _>>()?)
     }
 
     pub fn add_transcript(&self, line: &TranscriptLine) -> Result<i64> {
@@ -250,6 +375,37 @@ mod tests {
         );
         assert_eq!(t.meta("started_at_unix_ms").unwrap().as_deref(), Some("2"));
         assert_eq!(t.meta("missing").unwrap(), None);
+        drop(t);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn keyframes_round_trip_and_v1_files_are_upgraded() {
+        let dir = temp_dir("keyframes");
+        let path = dir.join("timeline.sqlite");
+        {
+            // A timeline written by M2 (schema v1).
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+                 CREATE TABLE transcript (id INTEGER PRIMARY KEY, speaker TEXT NOT NULL,
+                     start_ms INTEGER NOT NULL, end_ms INTEGER NOT NULL, text TEXT NOT NULL,
+                     model TEXT NOT NULL, created_at INTEGER NOT NULL);
+                 PRAGMA user_version = 1;",
+            )
+            .unwrap();
+        }
+        let t = Timeline::open(&path).unwrap();
+        let mut b = KeyframeRow::new(9000, "keyframes/000009000.png", 1920, 1080, "settled", 0.2);
+        let a = KeyframeRow::new(1000, "keyframes/000001000.png", 1920, 1080, "first", 1.0);
+        t.add_keyframe(&b).unwrap();
+        t.add_keyframe(&a).unwrap();
+        t.set_keyframe_read(9000, "read", Some("{}"), Some("m"), None)
+            .unwrap();
+        b.read_status = "read".into();
+        b.reading = Some("{}".into());
+        b.model = Some("m".into());
+        assert_eq!(t.keyframes().unwrap(), vec![a, b]);
         drop(t);
         std::fs::remove_dir_all(dir).unwrap();
     }

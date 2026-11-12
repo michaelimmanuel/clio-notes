@@ -1,7 +1,9 @@
-// The meeting view: start and stop a meeting and watch the live transcript.
+// The meeting view: start and stop a meeting and watch the live transcript,
+// with screen keyframes placed where they appeared.
 
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { refreshDevices } from "./devices";
 import { $, errorText, h, toast } from "./dom";
 
 // ---- Types mirrored from app/src-tauri/src/meeting.rs and crates/pipeline ----
@@ -22,12 +24,38 @@ type PipelineEvent =
   | { type: "empty"; speaker: Speaker; start_ms: number; end_ms: number }
   | { type: "failed"; speaker: Speaker; start_ms: number; end_ms: number; message: string };
 
+interface ScreenReading {
+  kind: string;
+  title: string;
+  text: string;
+  terms: string[];
+  summary: string;
+}
+
+type SkipReason = "busy" | "cap" | "no_profile";
+
+type ScreenEvent =
+  | {
+      type: "keyframe";
+      t_ms: number;
+      file: string;
+      reason: "first" | "settled" | "moving";
+      repeat_of: number | null;
+      thumbnail: string;
+    }
+  | { type: "read"; t_ms: number; reading: ScreenReading; latency_ms: number; reads_used: number }
+  | { type: "read_skipped"; t_ms: number; reason: SkipReason }
+  | { type: "read_failed"; t_ms: number; message: string };
+
 interface MeetingInfo {
   dir: string;
   started_at_unix_ms: number;
   mic: string;
   system: string;
   model: string;
+  screen: string | null;
+  vision_model: string | null;
+  read_cap: number | null;
 }
 
 interface MeetingStatus {
@@ -40,6 +68,8 @@ interface MeetingSummary {
   dir: string;
   lines: number;
   failed: number;
+  keyframes: number;
+  reads: number;
   error: string | null;
 }
 
@@ -60,12 +90,29 @@ interface Row {
   latency_ms?: number;
 }
 
+interface Shot {
+  t_ms: number;
+  thumbnail: string;
+  repeat_of: number | null;
+  state: "reading" | "read" | "skipped" | "failed" | "repeat";
+  reading?: ScreenReading;
+  note?: string;
+}
+
 let phase: Phase = "idle";
 let meeting: MeetingInfo | null = null;
 let speechLabel: string | null = null;
 let lastSummary: MeetingSummary | null = null;
 const rows = new Map<string, Row>();
+const shots = new Map<number, Shot>();
+let readsUsed = 0;
 let timer: number | undefined;
+
+const SKIP_NOTE: Record<SkipReason, string> = {
+  busy: "Not read: screens changed faster than they could be read.",
+  cap: "Not read: this meeting reached its limit on screen reads.",
+  no_profile: "Not read: no profile is assigned to screen reading.",
+};
 
 const SPEAKER_LABEL: Record<Speaker, string> = { me: "Me", others: "Others" };
 
@@ -112,7 +159,9 @@ function renderControls() {
       { class: "meeting-status" },
       h("span", { class: `dot ${live ? "live" : ""}` }),
       h("span", { class: "elapsed mono" }, clock(elapsed)),
-      live ? " Recording microphone and system audio" : " Stopped. Finishing the last lines…",
+      live
+        ? ` Recording microphone, system audio${meeting?.screen ? " and screen" : ""}`
+        : " Stopped. Finishing the last lines and screens…",
     );
     button = h(
       "button",
@@ -125,24 +174,87 @@ function renderControls() {
     ? h(
         "div",
         { class: "fineprint" },
-        `Mic: ${meeting.mic} · System audio: ${meeting.system} · Model: ${meeting.model}`,
+        `Mic: ${meeting.mic} · System audio: ${meeting.system} · Speech model: ${meeting.model}`,
+        h("br"),
+        meeting.screen
+          ? `Screen: ${meeting.screen} · ${screenCounts()}`
+          : "Screen: not captured (turned off in Settings)",
       )
     : lastSummary
       ? h(
           "div",
           { class: lastSummary.error ? "result err" : "fineprint" },
           lastSummary.error ??
-            `Last meeting: ${lastSummary.lines} lines saved${lastSummary.failed ? `, ${lastSummary.failed} failed` : ""} in ${lastSummary.dir}`,
+            `Last meeting: ${lastSummary.lines} lines${lastSummary.failed ? ` (${lastSummary.failed} failed)` : ""}, ` +
+              `${lastSummary.keyframes} keyframes, ${lastSummary.reads} read. Saved in ${lastSummary.dir}`,
         )
       : null;
 
   slot.replaceChildren(h("div", { class: "row-between" }, status, button), ...(details ? [details] : []));
 }
 
+function screenCounts(): string {
+  const keyframes = [...shots.values()].filter((s) => s.repeat_of === null).length;
+  const reading = meeting?.vision_model
+    ? `${readsUsed}${meeting.read_cap !== null ? ` of ${meeting.read_cap}` : ""} screen reads (${meeting.vision_model})`
+    : "not read: no screen-reading profile";
+  return `${keyframes} keyframe${keyframes === 1 ? "" : "s"}, ${reading}`;
+}
+
+function lineView(r: Row): HTMLElement {
+  return h(
+    "div",
+    { class: `line ${r.state}` },
+    h("span", { class: "line-time mono" }, clock(r.start_ms)),
+    h("span", { class: `speaker ${r.speaker}` }, SPEAKER_LABEL[r.speaker]),
+    h("span", { class: "line-text" }, r.state === "pending" ? "…" : r.text),
+  );
+}
+
+function shotView(s: Shot): HTMLElement {
+  let body: HTMLElement;
+  if (s.state === "repeat") {
+    body = h("div", { class: "shot-note" }, `Back to the screen from ${clock(s.repeat_of ?? 0)}`);
+  } else if (s.state === "read" && s.reading) {
+    const r = s.reading;
+    body = h(
+      "div",
+      {},
+      r.title ? h("div", { class: "shot-title" }, r.title) : null,
+      h("div", { class: "shot-summary" }, r.summary),
+      r.terms.length
+        ? h("div", { class: "shot-terms" }, ...r.terms.slice(0, 12).map((t) => h("span", { class: "term" }, t)))
+        : null,
+    );
+  } else {
+    body = h(
+      "div",
+      { class: `shot-note ${s.state === "failed" ? "err" : ""}` },
+      s.state === "reading" ? "Reading the screen…" : (s.note ?? ""),
+    );
+  }
+  return h(
+    "div",
+    { class: `line shot ${s.state}` },
+    h("span", { class: "line-time mono" }, clock(s.t_ms)),
+    h("span", { class: "speaker screen" }, "Screen"),
+    h(
+      "div",
+      { class: "shot-body" },
+      h("img", { class: `shot-thumb ${s.state === "repeat" ? "small" : ""}`, src: s.thumbnail, alt: "Keyframe" }),
+      body,
+    ),
+  );
+}
+
 function renderTranscript() {
   const list = $("transcript");
   const nearBottom = window.innerHeight + window.scrollY >= document.body.scrollHeight - 80;
-  const sorted = [...rows.values()].sort((a, b) => a.start_ms - b.start_ms);
+  const items: { t: number; view: () => HTMLElement }[] = [
+    ...[...rows.values()].map((r) => ({ t: r.start_ms, view: () => lineView(r) })),
+    ...[...shots.values()].map((s) => ({ t: s.t_ms, view: () => shotView(s) })),
+  ];
+  const sorted = items.sort((a, b) => a.t - b.t);
   if (sorted.length === 0) {
     list.replaceChildren(
       h(
@@ -155,17 +267,7 @@ function renderTranscript() {
     );
     return;
   }
-  list.replaceChildren(
-    ...sorted.map((r) =>
-      h(
-        "div",
-        { class: `line ${r.state}` },
-        h("span", { class: "line-time mono" }, clock(r.start_ms)),
-        h("span", { class: `speaker ${r.speaker}` }, SPEAKER_LABEL[r.speaker]),
-        h("span", { class: "line-text" }, r.state === "pending" ? "…" : r.text),
-      ),
-    ),
-  );
+  list.replaceChildren(...sorted.map((i) => i.view()));
   if (nearBottom && phase !== "idle") window.scrollTo({ top: document.body.scrollHeight });
 }
 
@@ -189,6 +291,8 @@ async function refreshSpeechLabel() {
 async function start() {
   phase = "starting";
   rows.clear();
+  shots.clear();
+  readsUsed = 0;
   lastSummary = null;
   render();
   try {
@@ -242,6 +346,33 @@ function onEvent(e: PipelineEvent) {
   renderTranscript();
 }
 
+function onScreen(e: ScreenEvent) {
+  if (e.type === "keyframe") {
+    shots.set(e.t_ms, {
+      t_ms: e.t_ms,
+      thumbnail: e.thumbnail,
+      repeat_of: e.repeat_of,
+      state: e.repeat_of === null ? "reading" : "repeat",
+    });
+  } else {
+    const s = shots.get(e.t_ms);
+    if (!s) return;
+    if (e.type === "read") {
+      s.state = "read";
+      s.reading = e.reading;
+      readsUsed = Math.max(readsUsed, e.reads_used);
+    } else if (e.type === "read_skipped") {
+      s.state = "skipped";
+      s.note = SKIP_NOTE[e.reason];
+    } else {
+      s.state = "failed";
+      s.note = `Not read: ${e.message}`;
+    }
+  }
+  renderTranscript();
+  renderControls();
+}
+
 function onFinished(summary: MeetingSummary) {
   window.clearInterval(timer);
   phase = "idle";
@@ -249,7 +380,7 @@ function onFinished(summary: MeetingSummary) {
   lastSummary = summary;
   render();
   if (summary.error) toast(summary.error, true);
-  else toast(`Meeting saved: ${summary.lines} lines`);
+  else toast(`Meeting saved: ${summary.lines} lines, ${summary.keyframes} keyframes`);
 }
 
 // ---- Views ----
@@ -263,6 +394,8 @@ export function showView(view: View) {
     tab.setAttribute("aria-selected", String(tab.dataset.view === view));
   }
   if (view === "meeting") void showMeetingView();
+  // Picks up devices plugged in since the list was last read.
+  if (view === "settings") void refreshDevices();
 }
 
 export async function showMeetingView() {
@@ -277,6 +410,7 @@ export async function initMeeting() {
     tab.addEventListener("click", () => showView(tab.dataset.view as View));
   }
   await listen<PipelineEvent>("meeting-event", (e) => onEvent(e.payload));
+  await listen<ScreenEvent>("meeting-screen", (e) => onScreen(e.payload));
   await listen<MeetingSummary>("meeting-finished", (e) => onFinished(e.payload));
 
   // The window may have been reloaded while a meeting runs.
