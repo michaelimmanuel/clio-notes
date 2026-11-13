@@ -182,4 +182,7 @@ attaches them to a draft release. To sign and notarize the macOS app, add the se
 
 ## License
 
-All rights reserved. This project is not open source.
+Clio Notes is open source under the [MIT License](LICENSE). You may use, copy, change and share
+it, including in commercial work, as long as the copyright notice and license text are kept.
+
+Contributions are welcome: open an issue or a pull request.
