@@ -218,8 +218,8 @@ and correctly answer five questions about what was decided and shown.
       meeting shows its final notes, live notes and transcript; open folder, rewrite final
       notes, move to the Recycle Bin (with confirmation)
 - [x] `replay` runs the final pass too (`--no-final`)
-- [ ] First live meeting with final notes in the app
-- [ ] Exit check
+- [x] First live meeting with final notes in the app
+- [x] Exit check
 
 Measured on the 59 s desktop fixture: 2 live sections became 2 topics with a title, summary and
 1 action item; 12.5 s, about 1.1k input / 1.2k output tokens (gpt-6-luna).
