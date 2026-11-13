@@ -93,9 +93,15 @@ let error: string | null = null;
 let busy = false;
 let chosen: Provider = PROVIDERS[0];
 
+const ALL_ROLES = Object.keys(JOB) as Role[];
+/** The jobs this run of the setup is filling. */
+let targets: Role[] = ALL_ROLES;
+/** Jobs given a profile during this run. */
+const filled = new Set<Role>();
+
+/** The jobs still to fill in this run. */
 function missing(): Role[] {
-  if (!settings) return ["speech_to_text", "vision", "text"];
-  return (Object.keys(JOB) as Role[]).filter((r) => !settings!.roles[r]);
+  return targets.filter((r) => !filled.has(r));
 }
 
 function suggest(provider: Provider, role: Role, models: string[]): string {
@@ -245,10 +251,11 @@ function modelStep(s: Extract<Step, { kind: "models" }>): HTMLElement {
         if (!created) continue;
         for (const role of rolesFor) {
           settings = await invoke<SettingsView>("assign_role", { role, profileId: created.id });
+          filled.add(role);
         }
       }
       window.dispatchEvent(new Event("settings-changed"));
-      step = missing().includes("speech_to_text")
+      step = !settings?.roles.speech_to_text
         ? {
             kind: "key",
             message:
@@ -364,6 +371,11 @@ export async function showSetup() {
   } catch {
     settings = null;
   }
+  // Fills the jobs that have no profile; when every job has one, the setup
+  // was opened to change them, so all are offered again.
+  const unassigned = ALL_ROLES.filter((r) => !settings?.roles[r]);
+  targets = unassigned.length > 0 ? unassigned : ALL_ROLES;
+  filled.clear();
   render();
 }
 
