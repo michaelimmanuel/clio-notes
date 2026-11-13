@@ -143,6 +143,17 @@ impl Sectioner {
         }
     }
 
+    /// A sectioner whose first section starts at `start_ms`, for writing the
+    /// rest of a meeting whose earlier sections are already written.
+    pub fn starting_at(cfg: SectionConfig, start_ms: u64) -> Self {
+        let mut s = Self::new(cfg);
+        s.cursor = start_ms;
+        s.open_start = start_ms;
+        s.now = start_ms;
+        s.latest = start_ms;
+        s
+    }
+
     /// Takes one input and returns the sections that are now complete.
     pub fn push(&mut self, input: NotesInput) -> Vec<SectionDraft> {
         match input {

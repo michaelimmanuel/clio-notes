@@ -612,6 +612,7 @@ dependencies = [
  "ctrlc",
  "hound",
  "image",
+ "log",
  "serde",
  "serde_json",
  "xcap",
@@ -819,6 +820,7 @@ name = "clio-notes"
 version = "0.1.0"
 dependencies = [
  "capture",
+ "log",
  "pipeline",
  "providers",
  "reqwest",
@@ -3801,6 +3803,7 @@ dependencies = [
  "earshot",
  "hound",
  "image",
+ "log",
  "providers",
  "serde",
  "serde_json",

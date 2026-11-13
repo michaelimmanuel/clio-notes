@@ -13,6 +13,7 @@ type CaptureSettings = {
   record_screen: boolean;
   screen_mode: "auto" | "slides";
   screen_read_cap: number | null;
+  remind_consent: boolean;
 };
 
 const READ_CAPS: (number | null)[] = [20, 60, 120, null];
@@ -144,6 +145,18 @@ function render() {
       : null,
   );
 
+  const consentSelect = h(
+    "select",
+    {
+      "aria-label": "Consent reminder",
+      disabled: busy,
+      onchange: (e: Event) =>
+        save({ ...settings, remind_consent: (e.target as HTMLSelectElement).value === "on" }),
+    },
+    h("option", { value: "on", selected: settings.remind_consent }, "Before every meeting"),
+    h("option", { value: "off", selected: !settings.remind_consent }, "Off"),
+  );
+
   container.replaceChildren(
     row(
       "Microphone",
@@ -167,6 +180,12 @@ function render() {
       "Screen reads per meeting",
       "Each new screen is sent to the screen-reading model. Screens past the limit are still saved, just not read.",
       capSelect,
+      null,
+    ),
+    row(
+      "Consent reminder",
+      "Reminds you to tell everyone that the meeting is being recorded before capture starts.",
+      consentSelect,
       null,
     ),
   );

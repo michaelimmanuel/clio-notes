@@ -7,12 +7,14 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+async-trait = "0.1.92"
 base64 = "0.23.1"
 capture.workspace = true
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
 earshot = "1.2.2"
 hound = "3.5.1"
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg"] }
+log = "0.4"
 providers.workspace = true
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
@@ -20,5 +22,3 @@ storage.workspace = true
 thiserror = "2.0.21"
 tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "sync", "time"] }
 
-[dev-dependencies]
-async-trait = "0.1.92"

@@ -229,12 +229,30 @@ are shorter and clearer than the live notes for the same meeting.
 
 ### M6 — Hardening and release
 
-- [ ] Reconnect and resume when a provider connection drops mid-meeting
-- [ ] Crash safety: a meeting interrupted mid-way can still produce notes from the timeline
-- [ ] Visible recording indicator and a consent reminder before capture starts
-- [ ] Token and call usage shown per meeting, per role
-- [ ] Logs with keys and transcript content redacted
-- [ ] Installer and first-run setup that walks through adding a key
+- [x] Reconnect and resume when a provider connection drops mid-meeting: every client is
+      wrapped so calls that can pass (network, timeout, rate limit, overload) are retried with
+      growing pauses (2–30 s) for up to 20 minutes, 90 s once the meeting is stopping.
+      Utterances wait in their own tasks, so audio keeps being cut; the notes wait for the
+      transcript. The Meeting view shows a banner while a connection is down
+      (`meeting-connection` events)
+- [x] Crash safety: WAV files are flushed every 5 s; at startup a meeting that never stopped
+      gets a stop time and repaired WAV headers and shows as interrupted, with a notice on the
+      Meeting view. Its final pass first writes notes for the part after the last live
+      section from the saved transcript and screens. Closing the window while recording is
+      refused
+- [x] Visible recording indicator and a consent reminder before capture starts: red REC badge
+      with the time in the top bar, "● Recording" in the window title, red bar on the taskbar
+      button; the reminder can be turned off in Settings > Recording
+- [x] Token and call usage shown per meeting, per role (speech to text with audio minutes,
+      screen reading, live notes, final notes), stored as `usage` in the timeline
+- [x] Logs with keys and transcript content redacted: `logs/clio-notes.log` (2 MB, one old
+      file kept) holds counts, timings, device and model names and errors only; every line is
+      passed through a key/token filter; panics are logged. Settings links to the folder
+- [x] Installer and first-run setup that walks through adding a key: NSIS installer
+      (per-user, WebView2 bootstrapper); with no profiles the app opens a three-step setup
+      (provider and key, model per job, ready), also under Settings > Jobs
+- [ ] First live meeting with a forced network interruption
+- [ ] Exit check
 
 **Exit check:** a 90-minute meeting with one forced network interruption still yields complete
 notes, and a new user can go from install to first notes without help.

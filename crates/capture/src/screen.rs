@@ -280,7 +280,7 @@ fn capture_loop(
                 failed += 1;
                 let msg = e.to_string();
                 if msg != last_error {
-                    eprintln!("screen grab failed: {msg}");
+                    log::warn!("screen grab failed: {msg}");
                     last_error = msg;
                 }
                 continue;

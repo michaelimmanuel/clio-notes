@@ -7,9 +7,15 @@
 //! - `meeting-screen`: a [`ScreenEvent`] for each keyframe and its reading;
 //! - `meeting-notes`: a [`NotesEvent`] for each notes section and each
 //!   transcript line whose spelling was corrected;
+//! - `meeting-connection`: a [`LinkEvent`] when a provider connection is
+//!   lost (calls are being retried), comes back, or a call gives up;
 //! - `meeting-finished`: a [`MeetingSummary`] once capture has stopped and
 //!   every pending request has finished. The final pass then starts and is
 //!   reported with `meeting-final` (see [`crate::meetings`]).
+//!
+//! While a meeting records, the window title starts with "● Recording" and
+//! the taskbar button shows a red bar, so recording is visible even when the
+//! window is behind others.
 
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -19,13 +25,15 @@ use capture::{
     AudioRecorder, AudioSource, AudioStats, ScreenRecorder, ScreenStats, ScreenTarget, SessionClock,
 };
 use pipeline::{
-    Frame, NotesEvent, NotesInput, PipelineEvent, ScreenEvent, ScreenOptions, SectionConfig,
-    StreamOptions, notes_stream, screen_stream, transcribe_stream,
+    Frame, Link, LinkEvent, MeetingUsage, NotesEvent, NotesInput, Patience, PipelineEvent,
+    Resilient, ScreenEvent, ScreenOptions, SectionConfig, StreamOptions, notes_stream,
+    screen_stream, transcribe_stream,
 };
 use pipeline::{notes, screen};
 use providers::{ProviderClient, Role, TextGenerator};
 use serde::Serialize;
 use storage::{Speaker, Timeline};
+use tauri::window::{ProgressBarState, ProgressBarStatus};
 use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::sync::mpsc;
 
@@ -53,6 +61,8 @@ impl MeetingState {
 
 struct Running {
     stop: std_mpsc::Sender<()>,
+    /// Shortens retries once the meeting is stopping.
+    patience: Arc<Patience>,
     info: MeetingInfo,
     stopping: bool,
 }
@@ -90,6 +100,7 @@ pub struct MeetingSummary {
     reads: usize,
     sections: usize,
     error: Option<String>,
+    usage: MeetingUsage,
 }
 
 /// What the capture thread reports once every recorder is running.
@@ -187,10 +198,24 @@ pub async fn start_meeting(
     };
     // Screen reading is optional: without a profile, keyframes are still
     // kept for the notes, just not read.
+    // Every client retries through outages and counts its usage.
+    let patience = Patience::meeting();
+    let (link_tx, mut link_rx) = mpsc::unbounded_channel::<LinkEvent>();
+    let link = |role| Link::new(role, patience.clone(), Some(link_tx.clone()));
+    let links = [
+        link(Role::SpeechToText),
+        link(Role::Vision),
+        link(Role::Text),
+    ];
+    drop(link_tx);
+    let stt = Resilient::speech(stt, links[0].clone());
     let vision: Option<(String, Arc<dyn TextGenerator>)> = match settings.assigned(Role::Vision) {
         Some(p) if screen_target.is_some() => Some((
             p.model.clone(),
-            ProviderClient::for_profile(p, &state.keys, &state.http)?.into_text_generator(),
+            Resilient::text(
+                ProviderClient::for_profile(p, &state.keys, &state.http)?.into_text_generator(),
+                links[1].clone(),
+            ),
         )),
         _ => None,
     };
@@ -199,7 +224,10 @@ pub async fn start_meeting(
     let writer: Option<(String, Arc<dyn TextGenerator>)> = match settings.assigned(Role::Text) {
         Some(p) => Some((
             p.model.clone(),
-            ProviderClient::for_profile(p, &state.keys, &state.http)?.into_text_generator(),
+            Resilient::text(
+                ProviderClient::for_profile(p, &state.keys, &state.http)?.into_text_generator(),
+                links[2].clone(),
+            ),
         )),
         None => None,
     };
@@ -287,11 +315,16 @@ pub async fn start_meeting(
             // closes the pipeline's input once the last samples are in.
             let audio = [mic.stop(), system.stop()]
                 .into_iter()
-                .filter_map(|r| r.map_err(|e| eprintln!("stopping capture: {e:#}")).ok())
+                .filter_map(|r| {
+                    r.map_err(|e| log::warn!(target: "clio::meeting", "stopping capture: {e:#}"))
+                        .ok()
+                })
                 .collect();
             let screen = screen.and_then(|s| {
                 s.stop()
-                    .map_err(|e| eprintln!("stopping screen capture: {e:#}"))
+                    .map_err(
+                        |e| log::warn!(target: "clio::meeting", "stopping screen capture: {e:#}"),
+                    )
                     .ok()
             });
             let _ = stats_tx.send(CaptureStats { audio, screen });
@@ -331,6 +364,18 @@ pub async fn start_meeting(
     ] {
         let _ = timeline.set_meta(key, &value);
     }
+    log::info!(
+        target: "clio::meeting",
+        "Meeting {} started: mic \"{}\", system \"{}\", screen {:?}, speech {}, screen reading {:?}, notes {:?}",
+        crate::meetings::id_of(&dir),
+        info.mic,
+        info.system,
+        info.screen,
+        info.model,
+        info.vision_model,
+        info.notes_model,
+    );
+    show_recording(&app, true);
 
     let (events_tx, mut events_rx) = mpsc::unbounded_channel::<PipelineEvent>();
     for (speaker, rate, rx) in [
@@ -365,7 +410,11 @@ pub async fn start_meeting(
     let (notes_in_tx, notes_in_rx) = mpsc::unbounded_channel::<NotesInput>();
     let (notes_tx, mut notes_rx) = mpsc::unbounded_channel::<NotesEvent>();
     let mut notes_in = None;
-    let final_writer = writer.as_ref().map(|(_, w)| w.clone());
+    // The final pass makes its own client: these ones give up soon after stop.
+    let final_writer = settings
+        .assigned(Role::Text)
+        .and_then(|p| ProviderClient::for_profile(p, &state.keys, &state.http).ok())
+        .map(ProviderClient::into_text_generator);
     if let Some((_, writer)) = writer {
         tauri::async_runtime::spawn(notes_stream(
             SectionConfig::default(),
@@ -405,6 +454,14 @@ pub async fn start_meeting(
             reads: 0,
             sections: 0,
             error: None,
+            usage: MeetingUsage::default(),
+        };
+        let usage = |links: &[Arc<Link>]| {
+            let mut usage = MeetingUsage::default();
+            for link in links {
+                *usage.role_mut(link.role()) = link.usage();
+            }
+            usage
         };
         let (mut speech_open, mut screen_open, mut notes_open) = (true, true, true);
         while speech_open || screen_open || notes_open {
@@ -462,11 +519,19 @@ pub async fn start_meeting(
                     }
                     if let NotesEvent::Section { section, .. } = &event {
                         summary.sections += 1;
+                        // Kept up to date in case the app does not get to stop.
+                        if let Ok(json) = serde_json::to_string(&usage(&links)) {
+                            let _ = timeline.set_meta("usage", &json);
+                        }
                         if let Err(e) = notes::append_markdown(&notes_path, section) {
                             summary.error = Some(format!("Could not write notes-live.md: {e}"));
                         }
                     }
                     let _ = app.emit("meeting-notes", &event);
+                }
+                Some(event) = link_rx.recv() => {
+                    log_link(&event);
+                    let _ = app.emit("meeting-connection", &event);
                 }
             }
         }
@@ -485,11 +550,31 @@ pub async fn start_meeting(
                 let _ = timeline.set_meta("screen_stats", &json);
             }
         }
+        summary.usage = usage(&links);
+        if let Ok(json) = serde_json::to_string(&summary.usage) {
+            let _ = timeline.set_meta("usage", &json);
+        }
         let _ = timeline.set_meta("stopped_at_unix_ms", &now_unix_ms().to_string());
         drop(timeline);
+        log::info!(
+            target: "clio::meeting",
+            "Meeting {} stopped: {} lines ({} failed), {} keyframes ({} read), {} sections{}",
+            crate::meetings::id_of(&final_dir),
+            summary.lines,
+            summary.failed,
+            summary.keyframes,
+            summary.reads,
+            summary.sections,
+            summary
+                .error
+                .as_deref()
+                .map(|e| format!(", error: {e}"))
+                .unwrap_or_default()
+        );
         if let Some(window) = finished_app.get_webview_window("main") {
             let _ = window.set_content_protected(false);
         }
+        show_recording(&finished_app, false);
         let meetings = finished_app.state::<MeetingState>();
         meetings.running.lock().unwrap().take();
         let _ = finished_app.emit("meeting-finished", &summary);
@@ -499,6 +584,7 @@ pub async fn start_meeting(
 
     *meetings.running.lock().unwrap() = Some(Running {
         stop: stop_tx,
+        patience,
         info: info.clone(),
         stopping: false,
     });
@@ -515,8 +601,69 @@ pub fn stop_meeting(meetings: State<'_, MeetingState>) -> Result<(), UiError> {
         .as_mut()
         .ok_or_else(|| UiError::new("not_running", "No meeting is running."))?;
     r.stopping = true;
+    r.patience.stop();
     let _ = r.stop.send(());
     Ok(())
+}
+
+fn log_link(event: &LinkEvent) {
+    match event {
+        LinkEvent::Retrying {
+            role,
+            message,
+            waiting,
+            ..
+        } => log::warn!(
+            target: "clio::meeting",
+            "{}: connection problem, {waiting} call(s) waiting to retry: {message}",
+            role.label()
+        ),
+        LinkEvent::Restored { role, down_ms } => log::info!(
+            target: "clio::meeting",
+            "{}: connection back after {} s",
+            role.label(),
+            down_ms / 1000
+        ),
+        LinkEvent::GaveUp { role, message } => log::warn!(
+            target: "clio::meeting",
+            "{}: a call gave up after retrying: {message}",
+            role.label()
+        ),
+    }
+}
+
+/// Marks the window as recording: its title, and a red bar on its taskbar
+/// button.
+fn show_recording(app: &AppHandle, on: bool) {
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+    let title = app.package_info().name.clone();
+    let _ = window.set_title(&if on {
+        format!("\u{25cf} Recording \u{2013} {title}")
+    } else {
+        title
+    });
+    let _ = window.set_progress_bar(if on {
+        ProgressBarState {
+            status: Some(ProgressBarStatus::Error),
+            progress: Some(100),
+        }
+    } else {
+        ProgressBarState {
+            status: Some(ProgressBarStatus::None),
+            progress: None,
+        }
+    });
+}
+
+/// Whether a meeting is recording, for the window's close button.
+pub fn is_recording(app: &AppHandle) -> bool {
+    app.state::<MeetingState>()
+        .running
+        .lock()
+        .unwrap()
+        .is_some()
 }
 
 fn now_unix_ms() -> u64 {

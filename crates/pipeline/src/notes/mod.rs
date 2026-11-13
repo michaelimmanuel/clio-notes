@@ -183,17 +183,38 @@ struct Outcome {
 /// Runs until `input` closes and the last section has been written.
 pub async fn notes_stream(
     cfg: SectionConfig,
+    input: mpsc::UnboundedReceiver<NotesInput>,
+    writer: Arc<dyn TextGenerator>,
+    events: mpsc::UnboundedSender<NotesEvent>,
+) {
+    notes_stream_from(cfg, Resume::default(), input, writer, events).await
+}
+
+/// Where a notes stream picks up: after the sections already written.
+#[derive(Debug, Clone, Default)]
+pub struct Resume {
+    /// The end of the last written section.
+    pub start_ms: u64,
+    /// Headings of the written sections, in order. The next section gets
+    /// index `headings.len()`.
+    pub headings: Vec<String>,
+}
+
+/// [`notes_stream`] continuing after already written sections.
+pub async fn notes_stream_from(
+    cfg: SectionConfig,
+    resume: Resume,
     mut input: mpsc::UnboundedReceiver<NotesInput>,
     writer: Arc<dyn TextGenerator>,
     events: mpsc::UnboundedSender<NotesEvent>,
 ) {
-    let mut sectioner = Sectioner::new(cfg);
+    let mut sectioner = Sectioner::starting_at(cfg, resume.start_ms);
     let mut queue: VecDeque<SectionDraft> = VecDeque::new();
     let mut running: Option<tokio::task::JoinHandle<Outcome>> = None;
-    let mut headings: Vec<String> = Vec::new();
+    let mut next_index = resume.headings.len() as u32;
+    let mut headings: Vec<String> = resume.headings;
     // Every term seen on screen so far: a slide's terms stay useful after it.
     let mut glossary: Vec<String> = Vec::new();
-    let mut next_index = 0u32;
     let mut input_open = true;
 
     loop {

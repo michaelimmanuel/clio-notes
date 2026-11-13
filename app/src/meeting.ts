@@ -6,7 +6,9 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { refreshDevices } from "./devices";
 import { showMeetings } from "./meetings";
+import { showSetup } from "./setup";
 import { $, errorText, h, toast } from "./dom";
+import { type MeetingUsage, usageLines } from "./usage";
 
 // ---- Types mirrored from app/src-tauri/src/meeting.rs and crates/pipeline ----
 
@@ -98,6 +100,26 @@ interface MeetingSummary {
   reads: number;
   sections: number;
   error: string | null;
+  usage: MeetingUsage;
+}
+
+type LinkRole = "speech_to_text" | "vision" | "text";
+
+type LinkEvent =
+  | { state: "retrying"; role: LinkRole; message: string; waiting: number; down_ms: number }
+  | { state: "restored"; role: LinkRole; down_ms: number }
+  | { state: "gave_up"; role: LinkRole; message: string };
+
+interface CaptureSettings {
+  remind_consent: boolean;
+  [key: string]: unknown;
+}
+
+interface MeetingItem {
+  id: string;
+  started_at_unix_ms: number | null;
+  duration_ms: number;
+  status: "recording" | "finalizing" | "done" | "no_final" | "interrupted";
 }
 
 interface SpeechSetup {
@@ -153,6 +175,18 @@ let pane: Pane = "transcript";
 /// The notes model of the meeting on screen, kept after it ends.
 let notesModel: string | null = null;
 let timer: number | undefined;
+/// The consent reminder is showing, before capture starts.
+let confirming = false;
+/// Provider connections that are down, by role.
+const outages = new Map<LinkRole, { message: string; waiting: number; since: number }>();
+/// The newest meeting that was cut off by a crash or closed app, if it has no notes yet.
+let interrupted: MeetingItem | null = null;
+
+const ROLE_LABEL: Record<LinkRole, string> = {
+  speech_to_text: "speech to text",
+  vision: "screen reading",
+  text: "notes writing",
+};
 
 const SKIP_NOTE: Record<SkipReason, string> = {
   busy: "Not read: screens changed faster than they could be read.",
@@ -174,8 +208,125 @@ function clock(ms: number): string {
 
 // ---- Rendering ----
 
+/** The red "REC" badge in the top bar, shown on every tab while recording. */
+function renderRec() {
+  const rec = $("rec");
+  const on = phase === "running" || phase === "stopping";
+  rec.hidden = !on;
+  if (on && meeting) rec.textContent = `REC ${clock(Date.now() - meeting.started_at_unix_ms)}`;
+}
+
+function consentPanel(): HTMLElement {
+  const again = h("input", { type: "checkbox", id: "consent-again" }) as HTMLInputElement;
+  return h(
+    "div",
+    { class: "consent" },
+    h("h3", {}, "Before you record"),
+    h(
+      "p",
+      {},
+      "Tell everyone in the meeting that you are recording it and taking notes. " +
+        "In many places, recording a conversation needs the consent of everyone in it, " +
+        "and you are responsible for asking.",
+    ),
+    h("label", { class: "check" }, again, " Don’t remind me again"),
+    h(
+      "div",
+      { class: "detail-actions" },
+      h(
+        "button",
+        {
+          class: "btn primary",
+          type: "button",
+          onclick: () => {
+            confirming = false;
+            if (again.checked) void stopReminding();
+            void begin();
+          },
+        },
+        "Everyone knows, start recording",
+      ),
+      h(
+        "button",
+        {
+          class: "btn",
+          type: "button",
+          onclick: () => {
+            confirming = false;
+            renderControls();
+          },
+        },
+        "Cancel",
+      ),
+    ),
+  );
+}
+
+function outageBanner(): HTMLElement | null {
+  if (outages.size === 0 || !meeting) return null;
+  const parts = [...outages.entries()].map(([role, o]) => {
+    const waiting = o.waiting > 0 ? `, ${o.waiting} waiting` : "";
+    return `${ROLE_LABEL[role]} (for ${clock(Date.now() - o.since)}${waiting})`;
+  });
+  const first = [...outages.values()][0];
+  return h(
+    "div",
+    { class: "result warn" },
+    h("strong", {}, "Connection problem: "),
+    `retrying ${parts.join(" and ")}. Recording continues and nothing is lost; ` +
+      "the waiting parts are sent when the connection is back.",
+    h("br"),
+    h("span", { class: "fineprint" }, first.message),
+  );
+}
+
+function interruptedNotice(): HTMLElement | null {
+  if (!interrupted || meeting || lastSummary) return null;
+  const when = interrupted.started_at_unix_ms
+    ? new Date(interrupted.started_at_unix_ms).toLocaleString()
+    : "an earlier meeting";
+  const id = interrupted.id;
+  return h(
+    "div",
+    { class: "result warn" },
+    `The meeting from ${when} was cut off (the app closed or crashed). ` +
+      `Its ${clock(interrupted.duration_ms)} of recording, transcript and screens are kept. `,
+    h(
+      "a",
+      {
+        href: "#",
+        onclick: (e: Event) => {
+          e.preventDefault();
+          interrupted = null;
+          showView("meetings");
+          void showMeetings(id);
+        },
+      },
+      "Write its notes",
+    ),
+    " · ",
+    h(
+      "a",
+      {
+        href: "#",
+        onclick: (e: Event) => {
+          e.preventDefault();
+          interrupted = null;
+          renderControls();
+        },
+      },
+      "Dismiss",
+    ),
+  );
+}
+
 function renderControls() {
+  renderRec();
   const slot = $("meeting-controls");
+  if (phase === "idle" && confirming) {
+    slot.replaceChildren(consentPanel());
+    return;
+  }
   const elapsed = meeting ? Date.now() - meeting.started_at_unix_ms : 0;
 
   let status: HTMLElement;
@@ -260,10 +411,12 @@ function renderControls() {
                 ),
               )
             : null,
+          ...usageLines(lastSummary.usage).flatMap((u) => [h("br"), `${u.role}: ${u.text}`]),
         )
       : null;
 
-  slot.replaceChildren(h("div", { class: "row-between" }, status, button), ...(details ? [details] : []));
+  const extra = [outageBanner(), details, interruptedNotice()].filter((x): x is HTMLElement => x !== null);
+  slot.replaceChildren(h("div", { class: "row-between" }, status, button), ...extra);
 }
 
 function writtenSections(): number {
@@ -463,8 +616,35 @@ async function refreshSpeechLabel() {
   }
 }
 
+/** Shows the consent reminder first, unless the user turned it off. */
 async function start() {
+  try {
+    const view = await invoke<{ settings: CaptureSettings }>("get_devices");
+    if (view.settings.remind_consent) {
+      confirming = true;
+      renderControls();
+      return;
+    }
+  } catch {
+    // Settings unreadable: start_meeting reports the real problem.
+  }
+  await begin();
+}
+
+async function stopReminding() {
+  try {
+    const view = await invoke<{ settings: CaptureSettings }>("get_devices");
+    await invoke("set_capture_devices", { settings: { ...view.settings, remind_consent: false } });
+    void refreshDevices();
+  } catch (e) {
+    toast(`Could not save the setting: ${errorText(e)}`, true);
+  }
+}
+
+async function begin() {
   phase = "starting";
+  outages.clear();
+  interrupted = null;
   rows.clear();
   shots.clear();
   notes.clear();
@@ -597,8 +777,21 @@ function onFinal(e: { type: "started" | "done" | "failed"; id: string; title?: s
   renderControls();
 }
 
+function onLink(e: LinkEvent) {
+  if (e.state === "retrying") {
+    const since = outages.get(e.role)?.since ?? Date.now() - e.down_ms;
+    outages.set(e.role, { message: e.message, waiting: e.waiting, since });
+  } else if (e.state === "restored") {
+    if (outages.delete(e.role)) toast(`The connection for ${ROLE_LABEL[e.role]} is back. Catching up…`);
+  } else {
+    toast(`A ${ROLE_LABEL[e.role]} request gave up after retrying: ${e.message}`, true);
+  }
+  renderControls();
+}
+
 function onFinished(summary: MeetingSummary) {
   window.clearInterval(timer);
+  outages.clear();
   phase = "idle";
   meeting = null;
   lastSummary = summary;
@@ -613,12 +806,13 @@ function onFinished(summary: MeetingSummary) {
 
 // ---- Views ----
 
-export type View = "meeting" | "meetings" | "settings";
+export type View = "meeting" | "meetings" | "settings" | "setup";
 
 export function showView(view: View) {
   $("view-meeting").hidden = view !== "meeting";
   $("view-meetings").hidden = view !== "meetings";
   $("view-settings").hidden = view !== "settings";
+  $("view-setup").hidden = view !== "setup";
   for (const tab of document.querySelectorAll<HTMLButtonElement>(".tab")) {
     tab.setAttribute("aria-selected", String(tab.dataset.view === view));
   }
@@ -626,6 +820,7 @@ export function showView(view: View) {
   // Picks up devices plugged in since the list was last read.
   if (view === "settings") void refreshDevices();
   if (view === "meetings") void showMeetings();
+  if (view === "setup") void showSetup();
 }
 
 export async function showMeetingView() {
@@ -647,6 +842,12 @@ export async function initMeeting() {
     btn.addEventListener("click", () => showPane(btn.dataset.pane as Pane));
   }
   await listen<MeetingSummary>("meeting-finished", (e) => onFinished(e.payload));
+  await listen<LinkEvent>("meeting-connection", (e) => onLink(e.payload));
+  window.addEventListener("setup-finished", () => showView("meeting"));
+  await listen("close-blocked", () => {
+    showView("meeting");
+    toast("A meeting is recording. Stop it before closing Clio Notes, so its notes can be written.", true);
+  });
 
   // The window may have been reloaded while a meeting runs.
   const status = await invoke<MeetingStatus>("meeting_status");
@@ -655,7 +856,20 @@ export async function initMeeting() {
     notesModel = meeting.notes_model;
     phase = status.stopping ? "stopping" : "running";
     timer = window.setInterval(renderControls, 1000);
+  } else {
+    await findInterrupted();
   }
   await refreshSpeechLabel();
   render();
+}
+
+/** The newest meeting cut off by a crash that has no notes yet, so the user can finish it. */
+async function findInterrupted() {
+  try {
+    const items = await invoke<MeetingItem[]>("list_meetings");
+    const newest = items[0];
+    interrupted = newest?.status === "interrupted" ? newest : null;
+  } catch {
+    interrupted = null;
+  }
 }

@@ -5,6 +5,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { $, errorText, h, toast } from "./dom";
+import { type MeetingUsage, usageLines } from "./usage";
 
 // ---- Types mirrored from app/src-tauri/src/meetings.rs and crates/pipeline ----
 
@@ -50,6 +51,7 @@ interface MeetingDetail {
   sections: { start_ms: number; end_ms: number; heading: string; bullets: (Item & { kind: string })[] }[];
   transcript: { speaker: "me" | "others"; start_ms: number; text: string }[];
   keyframes: { t_ms: number; file: string; title: string }[];
+  usage: MeetingUsage | null;
 }
 
 type FinalEvent =
@@ -200,6 +202,7 @@ function detailView(d: MeetingDetail): HTMLElement {
       { class: "detail-head" },
       h("h2", { class: "detail-title" }, d.final_notes?.title || m.title || "Untitled meeting"),
       h("div", { class: "fineprint tight" }, `${when(m)} · ${duration(m.duration_ms)} · `, badge(m.status)),
+      usageView(d.usage),
     ),
     h("div", { class: "detail-actions" }, ...actions),
     h(
@@ -223,6 +226,17 @@ function detailView(d: MeetingDetail): HTMLElement {
   );
 }
 
+function usageView(u: MeetingUsage | null): HTMLElement | null {
+  const lines = usageLines(u);
+  if (lines.length === 0) return null;
+  return h(
+    "details",
+    { class: "usage" },
+    h("summary", {}, "Usage"),
+    h("ul", {}, ...lines.map((l) => h("li", {}, h("strong", {}, `${l.role}: `), l.text))),
+  );
+}
+
 function finalView(d: MeetingDetail): HTMLElement {
   const n = d.final_notes;
   if (!n) {
@@ -231,7 +245,10 @@ function finalView(d: MeetingDetail): HTMLElement {
         ? "The final notes are being written…"
         : d.item.status === "recording"
           ? "Final notes are written when the meeting stops."
-          : "This meeting has no final notes yet. Use “Write final notes” above.";
+          : d.item.status === "interrupted"
+            ? "This meeting was cut off because the app closed or crashed. Its recording, transcript and " +
+              "screens are kept. “Write final notes” also writes the notes for the part after the last live section."
+            : "This meeting has no final notes yet. Use “Write final notes” above.";
     return h("div", { class: "card empty" }, text);
   }
   const blocks: (HTMLElement | null)[] = [];

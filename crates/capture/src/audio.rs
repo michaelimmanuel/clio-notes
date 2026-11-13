@@ -333,13 +333,16 @@ where
                 counters.discontinuities.fetch_add(1, Ordering::Relaxed);
             } else {
                 counters.errors.fetch_add(1, Ordering::Relaxed);
-                eprintln!("audio stream error: {err}");
+                log::warn!("audio stream error: {err}");
             }
         },
         None,
     )?;
     Ok(stream)
 }
+
+/// How often the WAV file is flushed to disk while recording.
+const FLUSH_EVERY: std::time::Duration = std::time::Duration::from_secs(5);
 
 struct WriterStats {
     written: u64,
@@ -361,6 +364,7 @@ fn write_loop(
     let mut first_packet_ms = None;
     let mut drift_ms = 0;
     let mut peak = 0f32;
+    let mut flushed = Instant::now();
 
     for chunk in chunks {
         let end = clock.offset_of(chunk.received);
@@ -382,6 +386,12 @@ fn write_loop(
             wav.write_sample((s * i16::MAX as f32) as i16)?;
         }
         drift_ms = timeline.offset_ms(end);
+        // Writes the buffered samples and the header's lengths, so a crash
+        // leaves a playable file missing at most the last few seconds.
+        if flushed.elapsed() >= FLUSH_EVERY {
+            wav.flush()?;
+            flushed = Instant::now();
+        }
     }
 
     // Loopback goes quiet when nothing plays, so pad the tail up to the stop time.

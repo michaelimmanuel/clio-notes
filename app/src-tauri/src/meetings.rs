@@ -6,12 +6,21 @@
 //!
 //! The UI listens for `meeting-final`: a [`FinalEvent`] when the final pass
 //! of a meeting starts, finishes or fails.
+//!
+//! A meeting that never stopped (the app closed or crashed) is given a stop
+//! time and repaired audio files at startup ([`recover_interrupted`]). Its
+//! final pass first writes the notes for the part after its last live
+//! section.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
+use std::sync::Arc;
+use std::time::Duration;
+
 use pipeline::final_pass::{self, FinalNotes};
+use pipeline::{Link, MeetingUsage, Patience, Resilient, recover};
 use providers::{ProviderClient, Role, TextGenerator};
 use serde::Serialize;
 use storage::{Timeline, TranscriptLine};
@@ -53,7 +62,8 @@ pub enum MeetingStatus {
     Done,
     /// Stopped, but no final notes yet.
     NoFinal,
-    /// Never stopped: the app closed or crashed while it ran.
+    /// The app closed or crashed while it ran, and no final notes are
+    /// written yet.
     Interrupted,
 }
 
@@ -92,6 +102,8 @@ pub struct MeetingDetail {
     sections: Vec<LiveSectionView>,
     transcript: Vec<TranscriptLine>,
     keyframes: Vec<KeyframeView>,
+    /// Calls and tokens per role; `None` for meetings recorded before M6.
+    usage: Option<MeetingUsage>,
 }
 
 fn root() -> Result<PathBuf, UiError> {
@@ -119,7 +131,7 @@ fn meeting_dir(id: &str) -> Result<PathBuf, UiError> {
     Ok(dir)
 }
 
-fn id_of(dir: &Path) -> String {
+pub(crate) fn id_of(dir: &Path) -> String {
     dir.file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default()
@@ -138,9 +150,10 @@ fn status(app: &AppHandle, id: &str, timeline: &Timeline) -> MeetingStatus {
     if app.state::<Finalizing>().0.lock().unwrap().contains(id) {
         return MeetingStatus::Finalizing;
     }
+    let stopped = timeline.meta("stopped_at_unix_ms").ok().flatten().is_some();
     if timeline.meta("final_notes").ok().flatten().is_some() {
         MeetingStatus::Done
-    } else if timeline.meta("stopped_at_unix_ms").ok().flatten().is_some() {
+    } else if stopped && !recover::was_interrupted(timeline) {
         MeetingStatus::NoFinal
     } else {
         MeetingStatus::Interrupted
@@ -221,6 +234,7 @@ pub async fn get_meeting(app: AppHandle, id: String) -> Result<MeetingDetail, Ui
             })
             .collect();
         Ok(MeetingDetail {
+            usage: stored_usage(&timeline),
             final_notes: final_pass::stored(&timeline),
             sections: input
                 .sections
@@ -266,7 +280,7 @@ pub async fn meeting_image(
 }
 
 /// The text generator assigned in Settings, if any.
-fn writer(state: &AppState) -> Result<Option<std::sync::Arc<dyn TextGenerator>>, UiError> {
+fn writer(state: &AppState) -> Result<Option<Arc<dyn TextGenerator>>, UiError> {
     let settings = state.store.load()?;
     Ok(match settings.assigned(Role::Text) {
         Some(p) => {
@@ -276,12 +290,67 @@ fn writer(state: &AppState) -> Result<Option<std::sync::Arc<dyn TextGenerator>>,
     })
 }
 
+fn stored_usage(timeline: &Timeline) -> Option<MeetingUsage> {
+    timeline
+        .meta("usage")
+        .ok()
+        .flatten()
+        .and_then(|json| serde_json::from_str(&json).ok())
+}
+
+/// Adds to the usage stored with the meeting.
+fn add_usage(dir: &Path, change: impl FnOnce(&mut MeetingUsage)) {
+    let Ok(timeline) = Timeline::open(&dir.join("timeline.sqlite")) else {
+        return;
+    };
+    let mut usage = stored_usage(&timeline).unwrap_or_default();
+    change(&mut usage);
+    if let Ok(json) = serde_json::to_string(&usage) {
+        let _ = timeline.set_meta("usage", &json);
+    }
+}
+
+/// Finishes meetings that never stopped because the app closed or crashed:
+/// gives each a stop time and repairs its audio files. Their notes are
+/// written when the user asks for them. Runs at startup, before any
+/// meeting can start.
+pub fn recover_interrupted() {
+    let Ok(root) = storage::meetings_root() else {
+        return;
+    };
+    let Ok(entries) = std::fs::read_dir(&root) else {
+        return;
+    };
+    for dir in entries.filter_map(|e| e.ok()).map(|e| e.path()) {
+        if !valid_id(&id_of(&dir)) || !recover::needs_marking(&dir) {
+            continue;
+        }
+        match recover::mark_interrupted(&dir) {
+            Ok(ms) => log::warn!(
+                target: "clio::recover",
+                "Meeting {} was interrupted after {} s; its recording was kept",
+                id_of(&dir),
+                ms / 1000
+            ),
+            Err(e) => log::error!(
+                target: "clio::recover",
+                "Could not recover meeting {}: {e}",
+                id_of(&dir)
+            ),
+        }
+    }
+}
+
 /// Runs the final pass of the meeting in `dir` and reports it with
 /// `meeting-final` events. Refuses to run twice at once.
+///
+/// The writer is wrapped so it waits out a short outage, and its usage is
+/// added to the meeting's. For an interrupted meeting, the notes after the
+/// last live section are written first.
 pub async fn run_final_pass(
     app: &AppHandle,
     dir: &Path,
-    writer: Option<std::sync::Arc<dyn TextGenerator>>,
+    writer: Option<Arc<dyn TextGenerator>>,
 ) -> Result<FinalNotes, UiError> {
     let id = id_of(dir);
     if !app
@@ -297,8 +366,63 @@ pub async fn run_final_pass(
         ));
     }
     let _ = app.emit("meeting-final", FinalEvent::Started { id: id.clone() });
+    // Waits out an outage of up to three minutes per call.
+    let patience = Patience::new(Duration::from_secs(180), Duration::from_secs(180));
+    let tail_link = Link::new(Role::Text, patience.clone(), None);
+    let final_link = Link::new(Role::Text, patience, None);
+
+    let mut tail_error = None;
+    if let Some(w) = &writer {
+        let w = Resilient::text(w.clone(), tail_link.clone());
+        match recover::write_missing_sections(dir, w).await {
+            Ok((0, _)) => {}
+            Ok((n, _)) => log::info!(
+                target: "clio::recover",
+                "Meeting {id}: wrote {n} notes section(s) for the part after the interruption"
+            ),
+            Err(e) => {
+                log::warn!(
+                    target: "clio::recover",
+                    "Meeting {id}: could not write the notes after the interruption: {e}"
+                );
+                tail_error = Some(e);
+            }
+        }
+    }
+    let writer = writer.map(|w| Resilient::text(w, final_link.clone()));
     let result = final_pass::finalize(dir, writer.as_deref()).await;
+    add_usage(dir, |u| {
+        u.text.add(&tail_link.usage());
+        u.final_pass.add(&final_link.usage());
+    });
     app.state::<Finalizing>().0.lock().unwrap().remove(&id);
+    let result = result.map(|(mut notes, usage)| {
+        if let Some(e) = tail_error {
+            let note = format!(
+                "The notes for the end of this interrupted meeting could not be written: {e}"
+            );
+            notes.note = Some(match notes.note.take() {
+                Some(n) => format!("{n} {note}"),
+                None => note,
+            });
+        }
+        (notes, usage)
+    });
+    match &result {
+        Ok((notes, usage)) => log::info!(
+            target: "clio::final",
+            "Meeting {id}: final notes written ({} topics, {} in / {} out tokens){}",
+            notes.topics.len(),
+            usage.input_tokens,
+            usage.output_tokens,
+            notes
+                .note
+                .as_deref()
+                .map(|n| format!(": {n}"))
+                .unwrap_or_default()
+        ),
+        Err(e) => log::warn!(target: "clio::final", "Meeting {id}: final pass failed: {e}"),
+    }
     match result {
         Ok((notes, _usage)) => {
             let _ = app.emit(
@@ -344,6 +468,17 @@ pub async fn finalize_meeting(
 #[tauri::command]
 pub fn open_meeting_folder(app: AppHandle, id: String) -> Result<(), UiError> {
     let dir = meeting_dir(&id)?;
+    app.opener()
+        .open_path(dir.display().to_string(), None::<&str>)
+        .map_err(|e| UiError::new("open", e.to_string()))
+}
+
+/// Opens the folder with the app's log files.
+#[tauri::command]
+pub fn open_logs_folder(app: AppHandle) -> Result<(), UiError> {
+    let dir = crate::logging::folder()
+        .ok_or_else(|| UiError::new("open", "The log folder cannot be found."))?;
+    let _ = std::fs::create_dir_all(&dir);
     app.opener()
         .open_path(dir.display().to_string(), None::<&str>)
         .map_err(|e| UiError::new("open", e.to_string()))

@@ -642,7 +642,7 @@ a {
   margin-top: 14px;
   font-size: 12px;
   color: var(--muted);
-  word-break: break-all;
+  overflow-wrap: anywhere;
 }
 
 /* Roles */
@@ -976,4 +976,182 @@ select:focus,
   .brand-name {
     display: none;
   }
+}
+
+/* Recording badge in the top bar */
+
+.rec {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  font-variant-numeric: tabular-nums;
+  color: #fff;
+  background: var(--err);
+  border-radius: 999px;
+  padding: 3px 10px 3px 8px;
+  white-space: nowrap;
+}
+
+.rec::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #fff;
+  animation: pulse 1.6s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rec::before {
+    animation: none;
+  }
+}
+
+/* Consent reminder before a meeting starts */
+
+.consent {
+  display: grid;
+  gap: 10px;
+}
+
+.consent h3 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.consent p {
+  margin: 0;
+  max-width: 62ch;
+}
+
+.check {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.meeting-controls .result {
+  margin-top: 10px;
+}
+
+/* Usage per role in a meeting's details */
+
+.usage {
+  font-size: 13px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+
+.usage summary {
+  cursor: pointer;
+  width: max-content;
+}
+
+.usage ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+
+/* First-run setup */
+
+.setup-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  margin-bottom: 12px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.setup-step.current {
+  color: var(--text);
+  font-weight: 700;
+}
+
+.setup-step.past {
+  color: var(--ok);
+}
+
+.setup-card {
+  display: grid;
+  gap: 14px;
+  padding: 20px;
+}
+
+.setup-card h2 {
+  margin: 0;
+  font-size: 20px;
+  text-transform: none;
+  letter-spacing: -0.01em;
+  color: var(--text);
+}
+
+.setup-card p {
+  margin: 0;
+  max-width: 64ch;
+}
+
+.setup-card .roles {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.provider-choices {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 8px;
+}
+
+.provider-choice {
+  display: grid;
+  gap: 2px;
+  text-align: left;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.provider-choice span {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.provider-choice:hover {
+  background: var(--surface-2);
+}
+
+.provider-choice[aria-checked="true"] {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.provider-choice:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.setup-summary {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 4px;
+}
+
+@media (max-width: 560px) {
+  .setup-card .role {
+    grid-template-columns: 1fr;
+  }
+}
+
+.setup-card .fineprint {
+  margin-top: 0;
 }

@@ -28,6 +28,9 @@ pub struct CaptureSettings {
     pub screen_mode: ScreenMode,
     /// Most screen readings per meeting; `None` is no limit.
     pub screen_read_cap: Option<u32>,
+    /// Asks the user to tell everyone they are recording before each
+    /// meeting starts.
+    pub remind_consent: bool,
 }
 
 impl Default for CaptureSettings {
@@ -38,6 +41,7 @@ impl Default for CaptureSettings {
             record_screen: true,
             screen_mode: ScreenMode::Auto,
             screen_read_cap: Some(DEFAULT_READ_CAP),
+            remind_consent: true,
         }
     }
 }

@@ -13,6 +13,7 @@
         <span class="mark" aria-hidden="true">C</span>
         <span class="brand-name">Clio Notes</span>
       </div>
+      <span id="rec" class="rec" role="status" aria-label="Recording" hidden>REC</span>
       <nav class="tabs" role="tablist" aria-label="Views">
         <button class="tab" type="button" role="tab" data-view="meeting" aria-selected="true">Meeting</button>
         <button class="tab" type="button" role="tab" data-view="meetings" aria-selected="false">Meetings</button>
@@ -56,6 +57,10 @@
       <section id="meetings"></section>
     </main>
 
+    <main class="page" id="view-setup" hidden>
+      <section id="setup"></section>
+    </main>
+
     <main class="page" id="view-settings" hidden>
       <section class="intro">
         <h1>Settings</h1>
@@ -78,6 +83,7 @@
         <p class="section-desc">
           Clio Notes runs on your own API keys. Each job uses one provider profile. Keys are
           kept in Windows Credential Manager, never in files.
+          <a href="#" id="run-setup">Guided setup</a>
         </p>
         <div id="roles" class="card roles"></div>
       </section>
@@ -90,6 +96,10 @@
         <div id="form-slot"></div>
         <div id="profiles" class="profiles"></div>
         <p id="settings-path" class="fineprint"></p>
+        <p class="fineprint">
+          The log keeps errors, timings and counts, never keys or what was said or shown.
+          <a href="#" id="open-logs">Open the logs folder</a>
+        </p>
       </section>
     </main>
 

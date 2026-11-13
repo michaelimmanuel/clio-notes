@@ -1,7 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import { $, errorText, h, toast } from "./dom";
 import { initDevices } from "./devices";
-import { initMeeting } from "./meeting";
+import { initMeeting, showView } from "./meeting";
+import { needsSetup } from "./setup";
 import { initMeetings } from "./meetings";
 
 // ---- Types mirrored from app/src-tauri/src/settings.rs ----
@@ -539,6 +540,20 @@ window.addEventListener("DOMContentLoaded", async () => {
     return;
   }
   initDevices();
+  window.addEventListener("settings-changed", async () => {
+    try {
+      settings = await invoke<SettingsView>("get_settings");
+      render();
+    } catch {
+      // The next visit to Settings shows the error.
+    }
+  });
+  $("run-setup").addEventListener("click", (e) => (e.preventDefault(), showView("setup")));
+  $("open-logs").addEventListener("click", (e) => {
+    e.preventDefault();
+    invoke("open_logs_folder").catch((err) => toast(errorText(err), true));
+  });
+  if (await needsSetup()) showView("setup");
   initMeetings().catch((e) => toast(`Could not set up the meetings view: ${errorText(e)}`, true));
   initMeeting().catch((e) => toast(`Could not set up the meeting view: ${errorText(e)}`, true));
   try {

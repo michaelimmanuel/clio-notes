@@ -105,12 +105,18 @@ pub async fn transcribe_stream(
             start_ms: u.start_ms,
             end_ms: u.end_ms(),
         });
-        // Waits only when `max_in_flight` requests are already running; audio
-        // keeps arriving in the unbounded channel meanwhile.
-        let permit = slots.clone().acquire_owned().await.expect("never closed");
-        let (opts, stt, events, context) =
-            (opts.clone(), stt.clone(), events.clone(), context.clone());
+        // At most `max_in_flight` requests run at once; the rest wait in
+        // their own tasks, so cutting new utterances never stops, even when
+        // the provider is unreachable for minutes.
+        let (opts, stt, events, context, slots) = (
+            opts.clone(),
+            stt.clone(),
+            events.clone(),
+            context.clone(),
+            slots.clone(),
+        );
         tasks.spawn(async move {
+            let permit = slots.acquire_owned().await.expect("never closed");
             let event = transcribe_one(&opts, &u, stt.as_ref(), &context, cut_at).await;
             drop(permit);
             let _ = events.send(event);
