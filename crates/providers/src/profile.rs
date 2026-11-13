@@ -11,6 +11,11 @@ use crate::{anthropic, openai};
 
 /// Same folder Tauri uses for the app's config, so the desktop app and the
 /// command-line tools share one settings file.
+/// The app's folder name. macOS shows a folder ending in ".app" as an
+/// application, so it gets a plain name there.
+#[cfg(target_os = "macos")]
+const APP_DIR: &str = "Clio Notes";
+#[cfg(not(target_os = "macos"))]
 const APP_DIR: &str = "com.clionotes.app";
 const FILE_NAME: &str = "providers.json";
 

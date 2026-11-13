@@ -195,7 +195,7 @@ function detailView(d: MeetingDetail): HTMLElement {
     h(
       "a",
       { href: "#", class: "back", onclick: (e: Event) => (e.preventDefault(), close()) },
-      "← All meetings",
+      "← All meeting notes",
     ),
     h(
       "div",

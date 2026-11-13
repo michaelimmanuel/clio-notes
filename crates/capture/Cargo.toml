@@ -18,3 +18,7 @@ serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 xcap = "0.9.10"
 
+# Linux: the PulseAudio host (also served by PipeWire through pipewire-pulse)
+# exposes monitor sources, which is how the computer's sound is recorded there.
+[target.'cfg(target_os = "linux")'.dependencies]
+cpal = { version = "0.18.2", features = ["pulseaudio"] }

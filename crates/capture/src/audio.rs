@@ -1,4 +1,6 @@
-//! Microphone and system-audio (WASAPI loopback) capture to mono 16-bit WAV.
+//! Microphone and system-audio capture to mono 16-bit WAV. System audio is
+//! WASAPI loopback on Windows, a Core Audio process tap on macOS 14.6+ and a
+//! PulseAudio/PipeWire monitor source on Linux.
 //!
 //! Each recording is aligned to the [`SessionClock`]: sample 0 of the WAV file
 //! is session time 0. Silence is inserted wherever the device delivered no
@@ -54,7 +56,11 @@ pub fn list_devices() -> Result<(Vec<AudioDeviceInfo>, Vec<AudioDeviceInfo>)> {
             })
             .collect()
     };
-    let inputs = describe(host.input_devices()?.collect(), &default_in);
+    // Linux lists each speaker's monitor among the inputs; it is not a microphone.
+    let inputs = describe(
+        host.input_devices()?.filter(|d| !is_monitor(d)).collect(),
+        &default_in,
+    );
     let outputs = describe(host.output_devices()?.collect(), &default_out);
     Ok((inputs, outputs))
 }
@@ -155,11 +161,19 @@ impl AudioRecorder {
         let host = cpal::default_host();
         let device = find_device(&host, source, device)?;
         let device_name = device.to_string();
+        #[cfg(target_os = "linux")]
+        let device = match source {
+            AudioSource::Microphone => device,
+            AudioSource::SystemAudio => monitor_of(&host, &device)?,
+        };
 
-        // Loopback uses the output device's mix format; cpal turns an input
-        // stream on an output device into a WASAPI loopback stream.
+        // On Windows and macOS, loopback uses the output device's mix format;
+        // cpal turns an input stream on an output device into a loopback
+        // stream (WASAPI loopback, or a Core Audio process tap on macOS 14.6+).
+        // On Linux the device is already the sink's monitor source.
         let config = match source {
             AudioSource::Microphone => device.default_input_config(),
+            AudioSource::SystemAudio if cfg!(target_os = "linux") => device.default_input_config(),
             AudioSource::SystemAudio => device.default_output_config(),
         }
         .with_context(|| format!("no usable format for {device_name}"))?;
@@ -291,6 +305,33 @@ fn find_device(
             bail!("\"{wanted}\" matches several devices: {}", names.join(", "))
         }
     }
+}
+
+/// True for a PulseAudio monitor source ("<sink>.monitor"): the sound going to
+/// a speaker, not a microphone. Always false outside Linux.
+fn is_monitor(device: &cpal::Device) -> bool {
+    cfg!(target_os = "linux")
+        && device
+            .id()
+            .map(|id| id.id().ends_with(".monitor"))
+            .unwrap_or(false)
+}
+
+/// On Linux the sound sent to a sink is recorded from its monitor source.
+/// This needs the PulseAudio host, which PipeWire also serves through
+/// pipewire-pulse; plain ALSA has no monitor sources.
+#[cfg(target_os = "linux")]
+fn monitor_of(host: &cpal::Host, sink: &cpal::Device) -> Result<cpal::Device> {
+    if host.id() != cpal::HostId::PulseAudio {
+        bail!(
+            "recording the computer's sound on Linux needs PulseAudio or PipeWire \
+             (with pipewire-pulse); only ALSA was found"
+        );
+    }
+    let wanted = format!("{}.monitor", sink.id()?.id());
+    host.input_devices()?
+        .find(|d| d.id().map(|id| id.id() == wanted).unwrap_or(false))
+        .ok_or_else(|| anyhow!("{sink} has no monitor source to record from"))
 }
 
 fn kind(source: AudioSource) -> &'static str {

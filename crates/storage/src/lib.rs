@@ -370,14 +370,21 @@ impl Timeline {
     }
 }
 
-/// The folder holding every meeting: `<data dir>/com.clionotes.app/meetings`,
+/// The app's folder name. macOS shows a folder ending in ".app" as an
+/// application, so it gets a plain name there.
+#[cfg(target_os = "macos")]
+const APP_DIR: &str = "Clio Notes";
+#[cfg(not(target_os = "macos"))]
+const APP_DIR: &str = "com.clionotes.app";
+
+/// The folder holding every meeting: `<data dir>/<APP_DIR>/meetings`,
 /// or `$CLIO_NOTES_DATA_DIR/meetings` when that is set.
 pub fn meetings_root() -> Result<PathBuf> {
     let base = match std::env::var_os("CLIO_NOTES_DATA_DIR") {
         Some(dir) => PathBuf::from(dir),
         None => dirs::data_dir()
             .ok_or_else(|| StorageError::Other("cannot find the app data folder".into()))?
-            .join("com.clionotes.app"),
+            .join(APP_DIR),
     };
     Ok(base.join("meetings"))
 }

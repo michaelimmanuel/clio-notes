@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>Clio Notes records your microphone during a meeting to write its notes.</string>
+  <key>NSAudioCaptureUsageDescription</key>
+  <string>Clio Notes records your computer's sound during a meeting, so the other people in the call are in the notes.</string>
+  <key>NSScreenCaptureUsageDescription</key>
+  <string>Clio Notes takes screenshots of the shared screen during a meeting to put slides and demos in the notes.</string>
+</dict>
+</plist>

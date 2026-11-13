@@ -3,7 +3,7 @@
 // 1. Pick a provider and paste a key; the key is checked by listing the
 //    models it can use (free).
 // 2. Pick a model for each job that provider can do. One profile is saved
-//    per model, with the key in Windows Credential Manager, and assigned.
+//    per model, with the key in the system key store, and assigned.
 //    Anthropic cannot transcribe audio, so step 1 repeats for speech.
 // 3. Done: what each job uses, and a reminder about consent.
 //
@@ -193,7 +193,7 @@ function keyStep(message?: string): HTMLElement {
       {},
       message ??
         "Clio Notes runs on your own AI provider key. Pick a provider and paste a key; it is kept in " +
-          "Windows Credential Manager and only sent to that provider.",
+          "your system's key store (Credential Manager, Keychain or Secret Service) and only sent to that provider.",
     ),
     choices,
     urlField,

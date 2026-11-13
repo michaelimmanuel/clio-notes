@@ -16,7 +16,7 @@
       <span id="rec" class="rec" role="status" aria-label="Recording" hidden>REC</span>
       <nav class="tabs" role="tablist" aria-label="Views">
         <button class="tab" type="button" role="tab" data-view="meeting" aria-selected="true">Meeting</button>
-        <button class="tab" type="button" role="tab" data-view="meetings" aria-selected="false">Meetings</button>
+        <button class="tab" type="button" role="tab" data-view="meetings" aria-selected="false">Meeting notes</button>
         <button class="tab" type="button" role="tab" data-view="settings" aria-selected="false">Settings</button>
       </nav>
     </header>
@@ -48,7 +48,7 @@
 
     <main class="page" id="view-meetings" hidden>
       <section class="intro">
-        <h1>Meetings</h1>
+        <h1>Meeting notes</h1>
         <p>
           Every meeting you record, with its final notes. Each one is a folder with notes.md,
           its images, the transcript and the recorded audio.
@@ -82,7 +82,8 @@
         <h2>Jobs</h2>
         <p class="section-desc">
           Clio Notes runs on your own API keys. Each job uses one provider profile. Keys are
-          kept in Windows Credential Manager, never in files.
+          kept in your system's key store (Credential Manager, Keychain or Secret Service),
+          never in files.
           <a href="#" id="run-setup">Guided setup</a>
         </p>
         <div id="roles" class="card roles"></div>

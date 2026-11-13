@@ -554,7 +554,7 @@ window.addEventListener("DOMContentLoaded", async () => {
     invoke("open_logs_folder").catch((err) => toast(errorText(err), true));
   });
   if (await needsSetup()) showView("setup");
-  initMeetings().catch((e) => toast(`Could not set up the meetings view: ${errorText(e)}`, true));
+  initMeetings().catch((e) => toast(`Could not set up the meeting notes view: ${errorText(e)}`, true));
   initMeeting().catch((e) => toast(`Could not set up the meeting view: ${errorText(e)}`, true));
   try {
     settings = await invoke<SettingsView>("get_settings");
