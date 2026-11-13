@@ -251,8 +251,8 @@ are shorter and clearer than the live notes for the same meeting.
 - [x] Installer and first-run setup that walks through adding a key: NSIS installer
       (per-user, WebView2 bootstrapper); with no profiles the app opens a three-step setup
       (provider and key, model per job, ready), also under Settings > Jobs
-- [ ] First live meeting with a forced network interruption
-- [ ] Exit check
+- [x] First live meeting with a forced network interruption
+- [x] Exit check
 
 **Exit check:** a 90-minute meeting with one forced network interruption still yields complete
 notes, and a new user can go from install to first notes without help.
