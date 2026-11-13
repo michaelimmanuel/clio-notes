@@ -4,6 +4,7 @@
     "targets": ["app", "dmg"],
     "macOS": {
       "minimumSystemVersion": "14.6",
+      "signingIdentity": "-",
       "entitlements": "./Entitlements.plist"
     }
   }

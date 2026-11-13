@@ -96,17 +96,29 @@ jobs:
           cache-dependency-path: app/package-lock.json
       - working-directory: app
         run: npm ci
-      - uses: tauri-apps/tauri-action@v0
+      # macOS signing and notarization. Each secret is passed on only when it
+      # is set: an empty APPLE_CERTIFICATE makes the bundler fail. Without
+      # them the app is ad-hoc signed (tauri.macos.conf.json), and macOS asks
+      # to allow it in Privacy & Security the first time it opens.
+      - name: macOS signing secrets (when set)
+        if: runner.os == 'macOS'
+        shell: bash
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # macOS signing and notarization. Without these secrets the app is
-          # built unsigned, and macOS asks to allow it in Privacy & Security.
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
+            if [ -n "${!name}" ]; then
+              { echo "$name<<END_OF_SECRET"; echo "${!name}"; echo "END_OF_SECRET"; } >> "$GITHUB_ENV"
+            fi
+          done
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           projectPath: app
           args: ${{ matrix.args }}
