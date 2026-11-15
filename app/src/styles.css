@@ -1350,6 +1350,38 @@ input[type="checkbox"]:focus-visible {
   gap: 4px;
 }
 
+/* Update banner, under the top bar */
+.update-banner {
+  position: sticky;
+  top: 52px;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 10px 24px;
+  font-size: 13px;
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent) 9%, var(--bg));
+  border-bottom: 1px solid color-mix(in srgb, var(--accent) 25%, var(--border));
+}
+
+.update-banner[hidden] {
+  display: none;
+}
+
+.update-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.update-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
 /* Narrow windows */
 
 @media (max-width: 620px) {

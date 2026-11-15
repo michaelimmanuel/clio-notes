@@ -2,7 +2,9 @@
 #
 # - Every push to main and every pull request: build, test and lint on all three.
 # - A pushed tag like v0.2.0, or "Run workflow" on the Actions tab: also build the
-#   installers (.exe, .dmg, .deb and .AppImage) and attach them to a draft release.
+#   installers (.exe, .dmg, .deb and .AppImage) and attach them to a draft release,
+#   with signed update files and latest.json for the in-app updater. Publishing the
+#   release is what makes installed apps offer the update.
 name: Build
 
 on:
@@ -119,6 +121,10 @@ jobs:
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Signs the update files (and latest.json) that installed apps
+          # download. The matching public key is in tauri.conf.json.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           projectPath: app
           args: ${{ matrix.args }}

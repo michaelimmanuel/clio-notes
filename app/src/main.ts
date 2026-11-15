@@ -4,6 +4,7 @@ import { initDevices } from "./devices";
 import { initMeeting, showView } from "./meeting";
 import { needsSetup } from "./setup";
 import { initMeetings } from "./meetings";
+import { initUpdates } from "./update";
 
 // ---- Types mirrored from app/src-tauri/src/settings.rs ----
 
@@ -556,6 +557,9 @@ window.addEventListener("DOMContentLoaded", async () => {
   if (await needsSetup()) showView("setup");
   initMeetings().catch((e) => toast(`Could not set up the meeting notes view: ${errorText(e)}`, true));
   initMeeting().catch((e) => toast(`Could not set up the meeting view: ${errorText(e)}`, true));
+  initUpdates().catch(() => {
+    // Updates are optional; the app works without them.
+  });
   try {
     settings = await invoke<SettingsView>("get_settings");
     render();

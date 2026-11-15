@@ -13,6 +13,8 @@ pub fn run() {
     meetings::recover_interrupted();
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .manage(state)
         .manage(meeting::MeetingState::default())
         .manage(meetings::Finalizing::default())

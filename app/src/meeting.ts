@@ -162,6 +162,11 @@ interface Shot {
 }
 
 let phase: Phase = "idle";
+
+/** True from Start until the meeting has fully stopped. */
+export function isRecording(): boolean {
+  return phase !== "idle";
+}
 let meeting: MeetingInfo | null = null;
 let speechLabel: string | null = null;
 let lastSummary: MeetingSummary | null = null;

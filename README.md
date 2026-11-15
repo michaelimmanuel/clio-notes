@@ -86,6 +86,17 @@ the Linux Secret Service). They are never written to settings files, meeting fol
 - While recording, a red REC badge with the time is shown on every tab, and the window cannot
   be closed until the meeting is stopped.
 
+## Updates
+
+Clio Notes checks for a new version when it opens and every few hours. When one is out, a banner
+offers **Install and restart**; nothing is downloaded until you click it, and it waits until
+your meeting and its final notes are done. **Settings > About** shows your version and has a
+**Check for updates** link. Updates are signed, and the app installs only ones signed with the
+project's key.
+
+Automatic updates work on Windows, macOS and the Linux AppImage. With the `.deb`, install the
+new `.deb` from the Releases page. Version 0.1.0 has no updater, so update it by hand once.
+
 ## Where files are kept
 
 | | Windows | macOS | Linux |
@@ -139,7 +150,9 @@ cd app
 npm run tauri build
 ```
 
-The installer lands in `target/release/bundle/`. Each system's installer must be built on that
+The installer lands in `target/release/bundle/`. Release builds also sign the update files,
+so set `TAURI_SIGNING_PRIVATE_KEY` to the updater key (or its path) first, and
+`TAURI_SIGNING_PRIVATE_KEY_PASSWORD` to its password, which may be empty. Each system's installer must be built on that
 system; the GitHub Actions workflow builds all of them.
 
 Run the checks:
@@ -176,9 +189,23 @@ cargo run -p replay -- fixtures/<session>               # replay a fixture throu
 
 The [Build](.github/workflows/build.yml) workflow checks every push on Windows, macOS and Linux.
 Pushing a tag like `v0.2.0`, or starting the workflow by hand, also builds every installer and
-attaches them to a draft release. To sign and notarize the macOS app, add the secrets
-`APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `APPLE_ID`,
-`APPLE_PASSWORD` and `APPLE_TEAM_ID` to the repository.
+attaches them to a draft release, together with the signed update files and `latest.json`.
+Installed apps see the update once the release is published.
+
+To ship an update:
+
+1. Raise the version in `app/src-tauri/tauri.conf.json` (and in `app/package.json` and the
+   root `Cargo.toml` to keep them in step), then commit.
+2. Push a tag with that version, such as `git tag v0.2.0 && git push origin v0.2.0`.
+3. When the workflow is done, write the release notes on the draft release and publish it.
+
+The workflow needs the repository secret `TAURI_SIGNING_PRIVATE_KEY` (the content of the
+updater private key), and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` if the key has a password. Keep the private key safe: if it
+is lost, installed apps can no longer be updated automatically.
+
+To sign and notarize the macOS app, add the secrets `APPLE_CERTIFICATE`,
+`APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `APPLE_ID`, `APPLE_PASSWORD` and
+`APPLE_TEAM_ID` to the repository.
 
 ## License
 

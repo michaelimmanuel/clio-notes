@@ -20,6 +20,7 @@
         <button class="tab" type="button" role="tab" data-view="settings" aria-selected="false">Settings</button>
       </nav>
     </header>
+    <div id="update-banner" class="update-banner" role="status" hidden></div>
 
     <main class="page" id="view-meeting">
       <section class="intro">
@@ -101,6 +102,16 @@
           The log keeps errors, timings and counts, never keys or what was said or shown.
           <a href="#" id="open-logs">Open the logs folder</a>
         </p>
+      </section>
+
+      <section>
+        <h2>About</h2>
+        <p class="section-desc">
+          Clio Notes <span id="app-version">–</span>. Updates are checked when the app opens and
+          installed only when you choose.
+          <a href="#" id="check-updates">Check for updates</a>
+        </p>
+        <p id="update-status" class="fineprint" role="status"></p>
       </section>
     </main>
 
