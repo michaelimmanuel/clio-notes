@@ -1,9 +1,11 @@
 use tauri::{Emitter, Manager};
 
 mod devices;
+mod export;
 mod logging;
 mod meeting;
 mod meetings;
+mod notion;
 mod settings;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -13,6 +15,7 @@ pub fn run() {
     meetings::recover_interrupted();
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .manage(state)
@@ -43,9 +46,17 @@ pub fn run() {
             meetings::get_meeting,
             meetings::meeting_image,
             meetings::finalize_meeting,
+            meetings::save_final_notes,
             meetings::open_meeting_folder,
             meetings::delete_meeting,
             meetings::open_logs_folder,
+            export::save_notes,
+            notion::notion_status,
+            notion::notion_connect,
+            notion::notion_disconnect,
+            notion::notion_pages,
+            notion::notion_set_parent,
+            notion::notion_export,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

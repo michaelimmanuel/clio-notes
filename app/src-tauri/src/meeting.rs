@@ -361,19 +361,29 @@ pub async fn start_meeting(
             "vision_model",
             info.vision_model.clone().unwrap_or_default(),
         ),
+        (
+            pipeline::language::SPEECH_LANGUAGE,
+            capture.speech_language.code().to_string(),
+        ),
+        (
+            pipeline::language::NOTES_LANGUAGE,
+            capture.notes_language.code().to_string(),
+        ),
     ] {
         let _ = timeline.set_meta(key, &value);
     }
     log::info!(
         target: "clio::meeting",
-        "Meeting {} started: mic \"{}\", system \"{}\", screen {:?}, speech {}, screen reading {:?}, notes {:?}",
+        "Meeting {} started: mic \"{}\", system \"{}\", screen {:?}, speech {} ({}), screen reading {:?}, notes {:?} ({})",
         crate::meetings::id_of(&dir),
         info.mic,
         info.system,
         info.screen,
         info.model,
+        capture.speech_language.code(),
         info.vision_model,
         info.notes_model,
+        capture.notes_language.code(),
     );
     show_recording(&app, true);
 
@@ -382,7 +392,8 @@ pub async fn start_meeting(
         (Speaker::Me, started.mic.1, mic_rx),
         (Speaker::Others, started.system.1, sys_rx),
     ] {
-        let opts = StreamOptions::new(speaker, rate, profile.model.clone());
+        let mut opts = StreamOptions::new(speaker, rate, profile.model.clone());
+        opts.language = capture.speech_language.speech_code().map(str::to_string);
         tauri::async_runtime::spawn(transcribe_stream(opts, rx, stt.clone(), events_tx.clone()));
     }
     drop(events_tx);
@@ -417,7 +428,10 @@ pub async fn start_meeting(
         .map(ProviderClient::into_text_generator);
     if let Some((_, writer)) = writer {
         tauri::async_runtime::spawn(notes_stream(
-            SectionConfig::default(),
+            SectionConfig {
+                language: capture.notes_language,
+                ..SectionConfig::default()
+            },
             notes_in_rx,
             writer,
             notes_tx,
@@ -666,7 +680,7 @@ pub fn is_recording(app: &AppHandle) -> bool {
         .is_some()
 }
 
-fn now_unix_ms() -> u64 {
+pub(crate) fn now_unix_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()

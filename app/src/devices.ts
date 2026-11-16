@@ -1,5 +1,5 @@
-// Settings > Recording: which microphone and display to capture, and how the
-// screen is turned into keyframes and read.
+// Settings > Recording: which microphone and display to capture, how the
+// screen is turned into keyframes and read, and the meeting's languages.
 
 import { invoke } from "@tauri-apps/api/core";
 import { $, errorText, h, toast } from "./dom";
@@ -14,7 +14,19 @@ type CaptureSettings = {
   screen_mode: "auto" | "slides";
   screen_read_cap: number | null;
   remind_consent: boolean;
+  speech_language: "en" | "id" | "id-en";
+  notes_language: "en" | "id";
 };
+
+const SPEECH_LANGUAGES: [CaptureSettings["speech_language"], string][] = [
+  ["en", "English"],
+  ["id", "Indonesian"],
+  ["id-en", "Indonesian and English (mixed)"],
+];
+const NOTES_LANGUAGES: [CaptureSettings["notes_language"], string][] = [
+  ["en", "English"],
+  ["id", "Indonesian"],
+];
 
 const READ_CAPS: (number | null)[] = [20, 60, 120, null];
 type DevicesView = {
@@ -157,7 +169,51 @@ function render() {
     h("option", { value: "off", selected: !settings.remind_consent }, "Off"),
   );
 
+  const speechSelect = h(
+    "select",
+    {
+      "aria-label": "Meeting language",
+      disabled: busy,
+      onchange: (e: Event) =>
+        save({
+          ...settings,
+          speech_language: (e.target as HTMLSelectElement).value as CaptureSettings["speech_language"],
+        }),
+    },
+    ...SPEECH_LANGUAGES.map(([code, name]) =>
+      h("option", { value: code, selected: settings.speech_language === code }, name),
+    ),
+  );
+
+  const notesSelect = h(
+    "select",
+    {
+      "aria-label": "Notes language",
+      disabled: busy,
+      onchange: (e: Event) =>
+        save({
+          ...settings,
+          notes_language: (e.target as HTMLSelectElement).value as CaptureSettings["notes_language"],
+        }),
+    },
+    ...NOTES_LANGUAGES.map(([code, name]) =>
+      h("option", { value: code, selected: settings.notes_language === code }, name),
+    ),
+  );
+
   container.replaceChildren(
+    row(
+      "Meeting language",
+      "What is spoken in your meetings. “Mixed” lets the speech model detect the language of each sentence, so English stays English and Indonesian stays Indonesian. Use a speech model that supports Indonesian, such as Whisper large-v3.",
+      speechSelect,
+      null,
+    ),
+    row(
+      "Notes language",
+      "The notes are written in this language, whatever is spoken. Names and technical terms are kept as they were said.",
+      notesSelect,
+      null,
+    ),
     row(
       "Microphone",
       "Recorded as “Me”.",

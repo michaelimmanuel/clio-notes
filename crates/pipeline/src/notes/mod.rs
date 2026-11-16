@@ -208,6 +208,7 @@ pub async fn notes_stream_from(
     writer: Arc<dyn TextGenerator>,
     events: mpsc::UnboundedSender<NotesEvent>,
 ) {
+    let language = cfg.language;
     let mut sectioner = Sectioner::starting_at(cfg, resume.start_ms);
     let mut queue: VecDeque<SectionDraft> = VecDeque::new();
     let mut running: Option<tokio::task::JoinHandle<Outcome>> = None;
@@ -244,6 +245,7 @@ pub async fn notes_stream_from(
                 headings.clone(),
                 glossary.clone(),
                 writer.clone(),
+                language,
             )));
         }
         if !input_open && running.is_none() {
@@ -296,6 +298,7 @@ async fn write_one(
     headings: Vec<String>,
     glossary: Vec<String>,
     writer: Arc<dyn TextGenerator>,
+    language: crate::language::NotesLanguage,
 ) -> Outcome {
     let started = Instant::now();
     let original: Vec<String> = draft.lines.iter().map(|l| l.text.clone()).collect();
@@ -307,7 +310,7 @@ async fn write_one(
         }
     }
 
-    let written = write::write_section(writer.as_ref(), &draft, &headings).await;
+    let written = write::write_section(writer.as_ref(), &draft, &headings, language).await;
     let (result, usage) = match written {
         Err(message) => (Err(message), Usage::default()),
         Ok(w) => {

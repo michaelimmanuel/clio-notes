@@ -74,6 +74,10 @@ pub struct UiError {
 }
 
 impl UiError {
+    pub(crate) fn message(&self) -> &str {
+        &self.message
+    }
+
     pub(crate) fn new(kind: &str, message: impl Into<String>) -> Self {
         Self {
             kind: kind.into(),

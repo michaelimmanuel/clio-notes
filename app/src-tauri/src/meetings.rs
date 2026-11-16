@@ -27,7 +27,7 @@ use storage::{Timeline, TranscriptLine};
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_opener::OpenerExt;
 
-use crate::meeting::MeetingState;
+use crate::meeting::{MeetingState, now_unix_ms};
 use crate::settings::{AppState, UiError};
 
 /// Meetings whose final pass is running.
@@ -104,6 +104,23 @@ pub struct MeetingDetail {
     keyframes: Vec<KeyframeView>,
     /// Calls and tokens per role; `None` for meetings recorded before M6.
     usage: Option<MeetingUsage>,
+    /// The Notion page these notes were last exported to.
+    notion_url: Option<String>,
+    /// When the final notes were last edited by hand; `None` when they are
+    /// as the final pass wrote them.
+    edited_at_unix_ms: Option<u64>,
+}
+
+/// Timeline meta key: when the final notes were last edited by hand. Empty
+/// once the final pass rewrites them.
+const EDITED_AT: &str = "final_edited_at_unix_ms";
+
+fn edited_at(timeline: &Timeline) -> Option<u64> {
+    timeline
+        .meta(EDITED_AT)
+        .ok()
+        .flatten()
+        .and_then(|v| v.parse().ok())
 }
 
 fn root() -> Result<PathBuf, UiError> {
@@ -120,7 +137,7 @@ fn valid_id(id: &str) -> bool {
 }
 
 /// The folder of meeting `id`, which must exist.
-fn meeting_dir(id: &str) -> Result<PathBuf, UiError> {
+pub(crate) fn meeting_dir(id: &str) -> Result<PathBuf, UiError> {
     if !valid_id(id) {
         return Err(UiError::new("not_found", "There is no such meeting."));
     }
@@ -235,6 +252,8 @@ pub async fn get_meeting(app: AppHandle, id: String) -> Result<MeetingDetail, Ui
             .collect();
         Ok(MeetingDetail {
             usage: stored_usage(&timeline),
+            notion_url: timeline.meta("notion_url").ok().flatten(),
+            edited_at_unix_ms: edited_at(&timeline),
             final_notes: final_pass::stored(&timeline),
             sections: input
                 .sections
@@ -425,6 +444,10 @@ pub async fn run_final_pass(
     }
     match result {
         Ok((notes, _usage)) => {
+            // The notes are as the model wrote them again.
+            if let Ok(timeline) = Timeline::open(&dir.join("timeline.sqlite")) {
+                let _ = timeline.set_meta(EDITED_AT, "");
+            }
             let _ = app.emit(
                 "meeting-final",
                 FinalEvent::Done {
@@ -463,6 +486,93 @@ pub async fn finalize_meeting(
     }
     let writer = writer(&state)?;
     run_final_pass(&app, &dir, writer).await
+}
+
+/// Cleans up final notes edited in the UI: trims text, drops empty points,
+/// and keeps a topic's screenshot only if it is one of the meeting's own
+/// keyframes. The exported image path is rebuilt by [`final_pass::export`].
+fn clean_edit(dir: &Path, mut notes: FinalNotes) -> Result<FinalNotes, UiError> {
+    notes.title = notes.title.trim().to_string();
+    if notes.title.is_empty() {
+        return Err(UiError::new("invalid", "The notes need a title."));
+    }
+    notes.summary = notes.summary.trim().to_string();
+    let keep = |items: &mut Vec<final_pass::Item>| {
+        items.retain_mut(|i| {
+            i.text = i.text.trim().to_string();
+            !i.text.is_empty()
+        });
+    };
+    keep(&mut notes.decisions);
+    notes.actions.retain_mut(|a| {
+        a.text = a.text.trim().to_string();
+        a.owner = a.owner.trim().to_string();
+        !a.text.is_empty()
+    });
+    notes.topics.retain_mut(|t| {
+        t.heading = t.heading.trim().to_string();
+        keep(&mut t.bullets);
+        !(t.heading.is_empty() && t.bullets.is_empty() && t.image.is_none())
+    });
+    for t in &mut notes.topics {
+        if t.heading.is_empty() {
+            t.heading = "Untitled topic".into();
+        }
+        if t.end_ms < t.start_ms {
+            t.end_ms = t.start_ms;
+        }
+        let own_keyframe = t.image.as_ref().is_some_and(|i| {
+            i.keyframe.starts_with("keyframes/")
+                && !i.keyframe.contains("..")
+                && !i.keyframe.contains('\\')
+                && dir.join(&i.keyframe).is_file()
+        });
+        if own_keyframe {
+            if let Some(i) = t.image.as_mut() {
+                i.file.clear();
+            }
+        } else {
+            t.image = None;
+        }
+    }
+    Ok(notes)
+}
+
+/// Saves final notes edited by hand: rewrites notes.md and images/ and
+/// stores them, like the final pass does.
+#[tauri::command]
+pub async fn save_final_notes(
+    app: AppHandle,
+    id: String,
+    notes: FinalNotes,
+) -> Result<FinalNotes, UiError> {
+    let dir = meeting_dir(&id)?;
+    if recording_id(&app).as_deref() == Some(id.as_str())
+        || app.state::<Finalizing>().0.lock().unwrap().contains(&id)
+    {
+        return Err(UiError::new(
+            "busy",
+            "The final notes are being written. Edit them when that is done.",
+        ));
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        let notes = clean_edit(&dir, notes)?;
+        let input = final_pass::load(&dir).map_err(|e| UiError::new("storage", e))?;
+        let saved =
+            final_pass::export(&dir, &input, notes).map_err(|e| UiError::new("storage", e))?;
+        let timeline = Timeline::open(&dir.join("timeline.sqlite"))
+            .map_err(|e| UiError::new("storage", e.to_string()))?;
+        timeline
+            .set_meta(EDITED_AT, &now_unix_ms().to_string())
+            .map_err(|e| UiError::new("storage", e.to_string()))?;
+        log::info!(
+            "Meeting {id}: final notes edited ({} topics)",
+            saved.topics.len()
+        );
+        Ok(saved)
+    })
+    .await
+    .map_err(|e| UiError::new("storage", e.to_string()))?
 }
 
 #[tauri::command]
@@ -526,5 +636,65 @@ mod tests {
         ] {
             assert!(!valid_id(bad), "{bad}");
         }
+    }
+
+    #[test]
+    fn edits_are_cleaned() {
+        use final_pass::{ActionItem, Item, Topic, TopicImage};
+        use pipeline::notes::Source;
+        let dir = std::env::temp_dir().join(format!("clio-edit-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("keyframes")).unwrap();
+        std::fs::write(dir.join("keyframes/1000.png"), b"png").unwrap();
+        let item = |t: &str| Item {
+            text: t.into(),
+            source: Source::Spoken,
+        };
+        let image = |k: &str| {
+            Some(TopicImage {
+                t_ms: 1000,
+                keyframe: k.into(),
+                file: "images/01-x.png".into(),
+            })
+        };
+        let topic = |h: &str, bullets: Vec<Item>, image: Option<TopicImage>| Topic {
+            heading: h.into(),
+            start_ms: 5000,
+            end_ms: 1000,
+            bullets,
+            image,
+        };
+        let notes = FinalNotes {
+            title: "  Plan  ".into(),
+            summary: " s ".into(),
+            decisions: vec![item(" yes "), item("   ")],
+            actions: vec![ActionItem {
+                text: " do it ".into(),
+                owner: " Ana ".into(),
+                source: Source::Spoken,
+            }],
+            topics: vec![
+                topic("", vec![item("point")], image("keyframes/1000.png")),
+                topic("Elsewhere", vec![], image("../secret.png")),
+                topic(" ", vec![item(" ")], None),
+            ],
+            model: None,
+            note: None,
+        };
+        let clean = clean_edit(&dir, notes).unwrap();
+        assert_eq!(clean.title, "Plan");
+        assert_eq!(clean.decisions.len(), 1);
+        assert_eq!(clean.actions[0].owner, "Ana");
+        assert_eq!(clean.topics.len(), 2);
+        assert_eq!(clean.topics[0].heading, "Untitled topic");
+        assert_eq!(clean.topics[0].end_ms, 5000);
+        assert_eq!(clean.topics[0].image.as_ref().unwrap().file, "");
+        assert!(clean.topics[1].image.is_none());
+
+        let untitled = FinalNotes {
+            title: " ".into(),
+            ..clean
+        };
+        assert!(clean_edit(&dir, untitled).is_err());
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

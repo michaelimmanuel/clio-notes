@@ -5,6 +5,7 @@ import { initMeeting, showView } from "./meeting";
 import { needsSetup } from "./setup";
 import { initMeetings } from "./meetings";
 import { initUpdates } from "./update";
+import { initNotion } from "./notion";
 
 // ---- Types mirrored from app/src-tauri/src/settings.rs ----
 
@@ -557,6 +558,7 @@ window.addEventListener("DOMContentLoaded", async () => {
   if (await needsSetup()) showView("setup");
   initMeetings().catch((e) => toast(`Could not set up the meeting notes view: ${errorText(e)}`, true));
   initMeeting().catch((e) => toast(`Could not set up the meeting view: ${errorText(e)}`, true));
+  initNotion().catch((e) => toast(`Could not load the Notion settings: ${errorText(e)}`, true));
   initUpdates().catch(() => {
     // Updates are optional; the app works without them.
   });

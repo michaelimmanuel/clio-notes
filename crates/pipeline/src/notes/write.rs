@@ -8,6 +8,7 @@ use serde_json::{Value, json};
 use super::correct::Correction;
 use super::sectioner::{Screen, SectionDraft};
 use super::{Bullet, BulletKind, Source, clock};
+use crate::language::NotesLanguage;
 
 /// The writer's reply, before it is checked.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -169,9 +170,10 @@ pub async fn write_section(
     generator: &dyn TextGenerator,
     draft: &SectionDraft,
     earlier_headings: &[String],
+    language: NotesLanguage,
 ) -> Result<Written, String> {
     let request = TextRequest::new(prompt(draft, earlier_headings))
-        .system(SYSTEM)
+        .system(format!("{SYSTEM}\n{}", language.rule()))
         .max_tokens(4000)
         .json_schema("meeting_section", schema());
     let mut usage = Usage::default();

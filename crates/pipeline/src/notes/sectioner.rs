@@ -17,6 +17,9 @@ use crate::screen::{KeyframeReason, ScreenReading};
 
 #[derive(Debug, Clone)]
 pub struct SectionConfig {
+    /// The language the sections are written in. The sectioner itself does
+    /// not use it.
+    pub language: crate::language::NotesLanguage,
     /// A screen change does not end a section younger than this.
     pub min_ms: u64,
     /// A section ends after this long even if the screen never changes.
@@ -36,6 +39,7 @@ pub struct SectionConfig {
 impl Default for SectionConfig {
     fn default() -> Self {
         Self {
+            language: Default::default(),
             min_ms: 30_000,
             max_ms: 180_000,
             break_change: 0.3,

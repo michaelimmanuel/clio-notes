@@ -1038,7 +1038,8 @@ section > .row-between:first-child {
 /* Controls */
 
 input,
-select {
+select,
+textarea {
   font: inherit;
   color: var(--text);
   background: var(--surface);
@@ -1057,7 +1058,8 @@ input::placeholder {
 }
 
 input:hover,
-select:hover {
+select:hover,
+textarea:hover {
   border-color: var(--faint);
 }
 
@@ -1094,7 +1096,8 @@ input[type="checkbox"] {
 }
 
 input:focus,
-select:focus {
+select:focus,
+textarea:focus {
   outline: none;
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--ring);
@@ -1348,6 +1351,235 @@ input[type="checkbox"]:focus-visible {
   padding-left: 18px;
   display: grid;
   gap: 4px;
+}
+
+/* Editing the final notes */
+textarea {
+  resize: none;
+  overflow: hidden;
+  line-height: 1.5;
+  display: block;
+}
+
+.editor {
+  gap: 10px;
+}
+
+.edit-label {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--muted);
+  margin-bottom: -4px;
+}
+
+.edit-title {
+  font-size: 18px;
+  font-weight: 650;
+}
+
+.edit-heading {
+  font-size: 15px;
+  font-weight: 600;
+  margin: 2px 0 10px;
+}
+
+.edit-list {
+  display: grid;
+  gap: 6px;
+}
+
+.edit-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 6px;
+  align-items: start;
+}
+
+.edit-row.action {
+  grid-template-columns: 1fr 150px auto;
+}
+
+.icon-btn {
+  font: inherit;
+  font-size: 18px;
+  line-height: 1;
+  width: 34px;
+  height: 36px;
+  color: var(--muted);
+  background: none;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.icon-btn:hover,
+.icon-btn:focus-visible {
+  color: var(--err);
+  background: var(--err-soft);
+  outline: none;
+}
+
+.add-btn {
+  justify-self: start;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  padding: 4px 8px;
+  color: var(--accent);
+  background: none;
+  border: 0;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.add-btn:hover,
+.add-btn:focus-visible {
+  background: var(--accent-soft);
+  outline: none;
+}
+
+.edit-image {
+  display: grid;
+  gap: 8px;
+  justify-items: start;
+}
+
+@media (max-width: 620px) {
+  .edit-row.action {
+    grid-template-columns: 1fr auto;
+  }
+
+  .edit-row.action .owner-field {
+    grid-column: 1;
+  }
+}
+
+/* Download menu on a meeting */
+.menu {
+  position: relative;
+}
+
+.menu > summary {
+  list-style: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.menu > summary::-webkit-details-marker {
+  display: none;
+}
+
+.menu > summary::after {
+  content: "";
+  width: 6px;
+  height: 6px;
+  margin-top: -3px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(45deg);
+  opacity: 0.6;
+}
+
+.menu-list {
+  position: absolute;
+  z-index: 6;
+  top: calc(100% + 6px);
+  left: 0;
+  width: min(320px, calc(100vw - 32px));
+  padding: 6px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lg);
+}
+
+.menu-list button {
+  display: grid;
+  gap: 2px;
+  width: 100%;
+  padding: 8px 10px;
+  font: inherit;
+  text-align: left;
+  color: var(--text);
+  background: none;
+  border: 0;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.menu-list button:hover,
+.menu-list button:focus-visible {
+  background: var(--surface-2);
+  outline: none;
+}
+
+.menu-list strong {
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+.menu-list span {
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+/* Settings > Notion */
+.notion {
+  display: grid;
+  gap: 14px;
+  padding: 16px 18px;
+}
+
+.notion .steps {
+  margin: 0;
+  padding-left: 20px;
+  display: grid;
+  gap: 4px;
+  font-size: 13.5px;
+  color: var(--muted);
+}
+
+.notion-parent {
+  margin: 0;
+  font-size: 13.5px;
+}
+
+.notion-picker {
+  display: grid;
+  gap: 8px;
+}
+
+.notion-pages {
+  display: grid;
+  gap: 2px;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.notion-page {
+  font: inherit;
+  font-size: 13.5px;
+  text-align: left;
+  padding: 7px 10px;
+  color: var(--text);
+  background: none;
+  border: 0;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+
+.notion-page:hover,
+.notion-page:focus-visible {
+  background: var(--surface-2);
+  outline: none;
+}
+
+.notion-page[aria-selected="true"] {
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
 }
 
 /* Update banner, under the top bar */

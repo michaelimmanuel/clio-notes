@@ -70,7 +70,7 @@ pub async fn write_missing_sections(
     dir: &Path,
     writer: Arc<dyn TextGenerator>,
 ) -> Result<(usize, Usage), String> {
-    let (resume, inputs) = {
+    let (resume, inputs, notes_language) = {
         let timeline = Timeline::open(&dir.join("timeline.sqlite")).map_err(|e| e.to_string())?;
         if !was_interrupted(&timeline) || timeline.meta(TAIL_WRITTEN).ok().flatten().is_some() {
             return Ok((0, Usage::default()));
@@ -81,7 +81,7 @@ pub async fn write_missing_sections(
             start_ms,
             headings: input.sections.iter().map(|s| s.heading.clone()).collect(),
         };
-        (resume, tail_inputs(&input, start_ms))
+        (resume, tail_inputs(&input, start_ms), input.notes_language)
     };
 
     let (in_tx, in_rx) = mpsc::unbounded_channel();
@@ -91,7 +91,10 @@ pub async fn write_missing_sections(
     drop(in_tx);
     let (tx, mut rx) = mpsc::unbounded_channel();
     let stream = tokio::spawn(notes::notes_stream_from(
-        SectionConfig::default(),
+        SectionConfig {
+            language: notes_language,
+            ..SectionConfig::default()
+        },
         resume,
         in_rx,
         writer,

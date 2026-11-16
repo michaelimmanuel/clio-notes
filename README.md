@@ -17,7 +17,11 @@ choose.
   title, a summary, decisions and action items (with the owner, when someone said who).
 - **Plain files.** Every meeting is a folder with `notes.md`, the screenshots it uses in
   `images/`, and the full `transcript.md`. They open in any Markdown viewer and can be pasted
-  into Notion, Obsidian, Confluence or an email.
+  into Obsidian, Confluence or an email.
+- **Edit before you share.** Fix a name, reword a point, add or remove decisions, action items,
+  topics and screenshots. `notes.md` is updated when you save.
+- **Download or send to Notion.** Save a meeting's notes as Markdown or as a zip, or export
+  them as a Notion page with their screenshots.
 - **Screens read, not just pictured.** Slide titles, text, tables, code and terms are read from
   the screen and used to fix the transcript, so a product name spelled on a slide is spelled
   the same way in the notes.
@@ -77,6 +81,31 @@ for each provider and lists its models.
 API keys are kept in your system's key store (Windows Credential Manager, the macOS Keychain or
 the Linux Secret Service). They are never written to settings files, meeting folders or logs.
 
+## Editing, download and Notion
+
+On a meeting under **Meeting notes**, once its final notes are written:
+
+- **Edit notes** turns the final notes into a form: title, summary, decisions, action items with
+  owners, and each topic's heading, points and screenshot. **Save changes** rewrites `notes.md`
+  and its images. **Rewrite final notes** asks first, since it replaces your edits.
+
+- **Download > Markdown (.md)** saves the notes with a folder of their screenshots next to them.
+- **Download > Zip (.zip)** saves the notes, screenshots and transcript in one file. Notion's
+  own Import (Markdown & CSV) also accepts it.
+- **Export to Notion** creates a new Notion page with the title, summary, decisions, action
+  items as to-dos, and each topic with its screenshot. The meeting then shows a link to it.
+
+To connect Notion, open **Settings > Notion** and follow the steps there:
+
+1. Create an internal integration at
+   [notion.so/profile/integrations](https://www.notion.so/profile/integrations) and copy its
+   secret.
+2. Paste the secret in Settings and click **Connect**.
+3. In Notion, open the page your notes should go under, click **••• > Connections** and add the
+   integration. Then pick that page in Settings.
+
+The secret is kept in your system's key store, like your AI keys.
+
 ## Reliability
 
 - If a provider connection drops, recording continues. Calls are retried for up to 20 minutes,
@@ -122,9 +151,23 @@ meeting-<date and time>/
   timeline.sqlite   everything above, with timings, for rewriting the notes
 ```
 
+## Languages
+
+**Settings > Recording** has two language settings:
+
+- **Meeting language:** what is spoken. Choose English, Indonesian, or **Indonesian and English
+  (mixed)** for meetings that switch between the two, even mid-sentence. With "mixed", the
+  speech model detects the language of each sentence, so English stays English. Indonesian
+  needs a speech model that supports it, such as Whisper large-v3 or large-v3-turbo.
+- **Notes language:** English or Indonesian. The notes are written in this language whatever
+  is spoken. Names, product names and technical terms are kept as they were said or shown.
+
+Each meeting keeps the languages it was recorded with, so rewriting its notes later gives
+notes in the same language.
+
 ## Limits
 
-- English only for now.
+- Speech in English and Indonesian (or a mix of both); notes in English or Indonesian.
 - Remote speakers are not told apart: everyone you hear is "Others".
 - It needs an internet connection to your AI providers. Fully offline models are not supported
   yet, though a local Ollama or Whisper server works through the OpenAI-compatible option.

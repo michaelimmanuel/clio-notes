@@ -361,6 +361,32 @@ pub fn thumbnail(image: &RgbaImage, width: u32) -> Result<String, String> {
     ))
 }
 
+/// An image file as JPEG bytes, scaled down to at most `max_width` pixels
+/// wide, for uploading where PNG screenshots would be too large.
+pub fn jpeg_of_file(
+    path: &std::path::Path,
+    max_width: u32,
+    quality: u8,
+) -> Result<Vec<u8>, String> {
+    let image = image::open(path)
+        .map_err(|e| format!("cannot read {}: {e}", path.display()))?
+        .into_rgba8();
+    let (w, h) = image.dimensions();
+    let tw = max_width.min(w.max(1));
+    let th = ((h as f32 * tw as f32 / w.max(1) as f32).round() as u32).max(1);
+    let small = if tw == w {
+        image
+    } else {
+        image::imageops::resize(&image, tw, th, FilterType::Triangle)
+    };
+    let rgb = image::DynamicImage::ImageRgba8(small).into_rgb8();
+    let mut out = std::io::Cursor::new(Vec::new());
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, quality)
+        .encode_image(&rgb)
+        .map_err(|e| e.to_string())?;
+    Ok(out.into_inner())
+}
+
 /// A preview of an image file, as a data URL for the UI.
 pub fn thumbnail_of_file(path: &std::path::Path, width: u32) -> Result<String, String> {
     let image = image::open(path)

@@ -1,5 +1,5 @@
-//! What to record, chosen in Settings: microphone, display, and how the
-//! screen is turned into keyframes and read.
+//! What to record, chosen in Settings: microphone, display, how the screen
+//! is turned into keyframes and read, and the meeting's languages.
 //!
 //! Stored in `capture.json` next to `providers.json`. A missing choice means
 //! the system default microphone and the primary display.
@@ -8,7 +8,7 @@ use std::path::PathBuf;
 
 use capture::audio::{AudioDeviceInfo, list_devices};
 use capture::screen::{MonitorInfo, list_monitors};
-use pipeline::ScreenMode;
+use pipeline::{NotesLanguage, ScreenMode, SpeechLanguage};
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
@@ -31,6 +31,10 @@ pub struct CaptureSettings {
     /// Asks the user to tell everyone they are recording before each
     /// meeting starts.
     pub remind_consent: bool,
+    /// What is spoken in meetings.
+    pub speech_language: SpeechLanguage,
+    /// What the notes are written in.
+    pub notes_language: NotesLanguage,
 }
 
 impl Default for CaptureSettings {
@@ -42,6 +46,8 @@ impl Default for CaptureSettings {
             screen_mode: ScreenMode::Auto,
             screen_read_cap: Some(DEFAULT_READ_CAP),
             remind_consent: true,
+            speech_language: SpeechLanguage::English,
+            notes_language: NotesLanguage::English,
         }
     }
 }
@@ -158,6 +164,11 @@ mod tests {
         assert_eq!(s.microphone.as_deref(), Some("Mic"));
         assert!(s.record_screen);
         assert_eq!(s.screen_read_cap, Some(DEFAULT_READ_CAP));
+        assert_eq!(s.speech_language, SpeechLanguage::English);
+        let id: CaptureSettings =
+            serde_json::from_str(r#"{"speech_language":"id-en","notes_language":"id"}"#).unwrap();
+        assert_eq!(id.speech_language, SpeechLanguage::IndonesianEnglish);
+        assert_eq!(id.notes_language, NotesLanguage::Indonesian);
         let unlimited: CaptureSettings =
             serde_json::from_str(r#"{"screen_read_cap":null}"#).unwrap();
         assert_eq!(unlimited.screen_read_cap, None);

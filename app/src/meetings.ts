@@ -1,10 +1,13 @@
 // The Meetings view: past meetings, their final notes, live notes and
-// transcript, and the actions on them (open folder, rewrite final notes,
-// move to the Recycle Bin).
+// transcript, and the actions on them (open folder, download, export to
+// Notion, rewrite final notes, move to the Recycle Bin).
 
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { save } from "@tauri-apps/plugin-dialog";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { $, errorText, h, toast } from "./dom";
+import { showView } from "./meeting";
 import { type MeetingUsage, usageLines } from "./usage";
 
 // ---- Types mirrored from app/src-tauri/src/meetings.rs and crates/pipeline ----
@@ -52,6 +55,8 @@ interface MeetingDetail {
   transcript: { speaker: "me" | "others"; start_ms: number; text: string }[];
   keyframes: { t_ms: number; file: string; title: string }[];
   usage: MeetingUsage | null;
+  notion_url: string | null;
+  edited_at_unix_ms: number | null;
 }
 
 type FinalEvent =
@@ -68,6 +73,11 @@ let detail: MeetingDetail | null = null;
 let openId: string | null = null;
 let pane: Pane = "final";
 let confirmingDelete = false;
+/** "Rewrite final notes" on notes edited by hand waits for a second click. */
+let confirmingRewrite = false;
+/** The notes being edited, a copy of the saved ones; `null` when not editing. */
+let draft: FinalNotes | null = null;
+let saving = false;
 let busy = false;
 const images = new Map<string, string>();
 
@@ -163,17 +173,52 @@ function listView(): HTMLElement {
 function detailView(d: MeetingDetail): HTMLElement {
   const m = d.item;
   const locked = m.status === "recording" || m.status === "finalizing";
-  const actions = confirmingDelete
+  const actions = draft
+    ? [
+        h("span", { class: "confirm-text" }, "Editing the final notes"),
+        h("button", { class: "btn primary", type: "button", disabled: saving, onclick: saveEdit }, saving ? "Saving…" : "Save changes"),
+        h("button", { class: "btn", type: "button", disabled: saving, onclick: cancelEdit }, "Cancel"),
+      ]
+    : confirmingRewrite
+    ? [
+        h("span", { class: "confirm-text" }, "Rewriting replaces your edits with new notes from the model."),
+        h("button", { class: "btn danger", type: "button", disabled: busy, onclick: () => ((confirmingRewrite = false), void finalize()) }, "Rewrite anyway"),
+        h("button", { class: "btn", type: "button", onclick: () => ((confirmingRewrite = false), render()) }, "Cancel"),
+      ]
+    : confirmingDelete
     ? [
         h("span", { class: "confirm-text" }, "Move this meeting, its audio and images to the Recycle Bin?"),
         h("button", { class: "btn danger", type: "button", disabled: busy, onclick: remove }, "Move to Recycle Bin"),
         h("button", { class: "btn", type: "button", onclick: () => ((confirmingDelete = false), render()) }, "Cancel"),
       ]
     : [
-        h("button", { class: "btn", type: "button", onclick: openFolder }, "Open folder"),
         h(
           "button",
-          { class: "btn", type: "button", disabled: busy || locked, onclick: finalize },
+          { class: "btn", type: "button", disabled: !d.final_notes || busy || locked, onclick: startEdit },
+          "Edit notes",
+        ),
+        h("button", { class: "btn", type: "button", onclick: openFolder }, "Open folder"),
+        downloadMenu(!d.final_notes || busy),
+        h(
+          "button",
+          { class: "btn", type: "button", disabled: !d.final_notes || busy || exporting, onclick: toNotion },
+          exporting ? "Exporting…" : "Export to Notion",
+        ),
+        h(
+          "button",
+          {
+            class: "btn",
+            type: "button",
+            disabled: busy || locked,
+            onclick: () => {
+              if (d.edited_at_unix_ms) {
+                confirmingRewrite = true;
+                render();
+              } else {
+                void finalize();
+              }
+            },
+          },
           d.final_notes ? "Rewrite final notes" : "Write final notes",
         ),
         h(
@@ -205,7 +250,25 @@ function detailView(d: MeetingDetail): HTMLElement {
       usageView(d.usage),
     ),
     h("div", { class: "detail-actions" }, ...actions),
-    h(
+    d.notion_url && !confirmingDelete
+      ? h(
+          "p",
+          { class: "fineprint tight" },
+          "Exported to Notion. ",
+          h(
+            "a",
+            {
+              href: "#",
+              onclick: (e: Event) => {
+                e.preventDefault();
+                void openUrl(d.notion_url!);
+              },
+            },
+            "Open in Notion",
+          ),
+        )
+      : null,
+    draft ? null : h(
       "div",
       { class: "seg", role: "tablist", "aria-label": "Meeting content" },
       ...panes.map(([id, label]) =>
@@ -222,7 +285,7 @@ function detailView(d: MeetingDetail): HTMLElement {
         ),
       ),
     ),
-    pane === "final" ? finalView(d) : pane === "live" ? liveView(d) : transcriptView(d),
+    draft ? editorView(d, draft) : pane === "final" ? finalView(d) : pane === "live" ? liveView(d) : transcriptView(d),
   );
 }
 
@@ -292,9 +355,222 @@ function finalView(d: MeetingDetail): HTMLElement {
   const footer = h(
     "p",
     { class: "fineprint" },
-    `Saved as notes.md with an images folder in ${d.item.dir}` + (n.model ? ` · written by ${n.model}` : ""),
+    `Saved as notes.md with an images folder in ${d.item.dir}` +
+      (n.model ? ` · written by ${n.model}` : "") +
+      (d.edited_at_unix_ms ? ` · edited ${new Date(d.edited_at_unix_ms).toLocaleString()}` : ""),
   );
   return h("div", { class: "notes" }, blocks.length ? head : null, ...topics, footer);
+}
+
+// ---- Editing the final notes ----
+
+/** A text box that writes into the draft as the user types, without re-rendering. */
+function textField(
+  value: string,
+  set: (v: string) => void,
+  props: Record<string, unknown> = {},
+  multiline = false,
+): HTMLInputElement | HTMLTextAreaElement {
+  const el = multiline
+    ? (h("textarea", { rows: 1, ...props }) as HTMLTextAreaElement)
+    : (h("input", { type: "text", ...props }) as HTMLInputElement);
+  el.value = value;
+  const grow = () => {
+    if (el instanceof HTMLTextAreaElement) {
+      el.style.height = "auto";
+      el.style.height = `${el.scrollHeight + 2}px`;
+    }
+  };
+  el.addEventListener("input", () => {
+    set(el.value);
+    grow();
+  });
+  requestAnimationFrame(grow);
+  return el;
+}
+
+function removeButton(label: string, onclick: () => void): HTMLElement {
+  return h("button", { class: "icon-btn", type: "button", "aria-label": label, title: label, onclick }, "×");
+}
+
+function addButton(label: string, onclick: () => void): HTMLElement {
+  return h("button", { class: "add-btn", type: "button", onclick }, `+ ${label}`);
+}
+
+/** Re-renders after a structural change and puts the cursor in the new field. */
+function changed(focus?: string) {
+  render();
+  if (focus) (document.querySelector(`[data-focus="${focus}"]`) as HTMLElement | null)?.focus();
+}
+
+function itemRows(list: Item[], label: string, key: string): HTMLElement {
+  return h(
+    "div",
+    { class: "edit-list" },
+    ...list.map((item, i) =>
+      h(
+        "div",
+        { class: "edit-row" },
+        textField(item.text, (v) => (item.text = v), { "aria-label": label, "data-focus": `${key}-${i}` }, true),
+        removeButton(`Remove this ${label.toLowerCase()}`, () => {
+          list.splice(i, 1);
+          changed();
+        }),
+      ),
+    ),
+    addButton(label, () => {
+      list.push({ text: "", source: "spoken" });
+      changed(`${key}-${list.length - 1}`);
+    }),
+  );
+}
+
+function editorView(d: MeetingDetail, n: FinalNotes): HTMLElement {
+  const head = h(
+    "div",
+    { class: "card final-head editor" },
+    h("label", { class: "edit-label" }, "Title"),
+    textField(n.title, (v) => (n.title = v), { class: "edit-title", "aria-label": "Title" }),
+    h("label", { class: "edit-label" }, "Summary"),
+    textField(n.summary, (v) => (n.summary = v), { "aria-label": "Summary" }, true),
+    h("h3", { class: "final-h" }, "Decisions"),
+    itemRows(n.decisions, "Decision", "decision"),
+    h("h3", { class: "final-h" }, "Action items"),
+    h(
+      "div",
+      { class: "edit-list" },
+      ...n.actions.map((a, i) =>
+        h(
+          "div",
+          { class: "edit-row action" },
+          textField(a.text, (v) => (a.text = v), { "aria-label": "Action item", "data-focus": `action-${i}` }, true),
+          textField(a.owner, (v) => (a.owner = v), { "aria-label": "Owner", placeholder: "Owner", class: "owner-field" }),
+          removeButton("Remove this action item", () => {
+            n.actions.splice(i, 1);
+            changed();
+          }),
+        ),
+      ),
+      addButton("Action item", () => {
+        n.actions.push({ text: "", owner: "", source: "spoken" });
+        changed(`action-${n.actions.length - 1}`);
+      }),
+    ),
+  );
+
+  const topics = n.topics.map((t, ti) => {
+    const img = h("img", { class: "note-image", alt: `Screen at ${t.image ? clock(t.image.t_ms) : ""}` });
+    if (t.image) void loadImage(d.item.id, t.image.file || t.image.keyframe, img);
+    return h(
+      "div",
+      { class: "card note editor" },
+      h(
+        "div",
+        { class: "row-between" },
+        h("div", { class: "note-time mono" }, `${clock(t.start_ms)} – ${clock(t.end_ms)}`),
+        h(
+          "button",
+          {
+            class: "btn small danger-text",
+            type: "button",
+            onclick: () => {
+              n.topics.splice(ti, 1);
+              changed();
+            },
+          },
+          "Remove topic",
+        ),
+      ),
+      textField(t.heading, (v) => (t.heading = v), {
+        class: "edit-heading",
+        "aria-label": "Topic heading",
+        "data-focus": `topic-${ti}`,
+      }),
+      h(
+        "div",
+        { class: t.image ? "note-body with-image" : "note-body" },
+        itemRows(t.bullets, "Point", `point-${ti}`),
+        t.image
+          ? h(
+              "div",
+              { class: "edit-image" },
+              img,
+              h(
+                "button",
+                {
+                  class: "btn small",
+                  type: "button",
+                  onclick: () => {
+                    t.image = null;
+                    changed();
+                  },
+                },
+                "Remove screenshot",
+              ),
+            )
+          : null,
+      ),
+    );
+  });
+
+  const last = n.topics[n.topics.length - 1];
+  return h(
+    "div",
+    { class: "notes" },
+    head,
+    ...topics,
+    addButton("Topic", () => {
+      const at = last ? last.end_ms : 0;
+      n.topics.push({ heading: "", start_ms: at, end_ms: at, bullets: [{ text: "", source: "spoken" }], image: null });
+      changed(`topic-${n.topics.length - 1}`);
+    }),
+    h(
+      "div",
+      { class: "detail-actions" },
+      h("button", { class: "btn primary", type: "button", disabled: saving, onclick: saveEdit }, saving ? "Saving…" : "Save changes"),
+      h("button", { class: "btn", type: "button", disabled: saving, onclick: cancelEdit }, "Cancel"),
+    ),
+  );
+}
+
+function startEdit() {
+  if (!detail?.final_notes) return;
+  draft = structuredClone(detail.final_notes);
+  confirmingDelete = false;
+  confirmingRewrite = false;
+  pane = "final";
+  render();
+  (document.querySelector(".edit-title") as HTMLInputElement | null)?.focus();
+}
+
+function cancelEdit() {
+  draft = null;
+  render();
+}
+
+async function saveEdit() {
+  if (!openId || !draft || saving) return;
+  if (!draft.title.trim()) {
+    toast("The notes need a title.", true);
+    (document.querySelector(".edit-title") as HTMLInputElement | null)?.focus();
+    return;
+  }
+  const id = openId;
+  saving = true;
+  render();
+  try {
+    await invoke("save_final_notes", { id, notes: draft });
+    draft = null;
+    // Exported images may have been renumbered.
+    for (const key of [...images.keys()]) if (key.startsWith(`${id}/images/`)) images.delete(key);
+    toast("Notes saved. notes.md is updated too.");
+    if (openId === id) await load(id);
+  } catch (e) {
+    toast(errorText(e), true);
+  } finally {
+    saving = false;
+    render();
+  }
 }
 
 function liveView(d: MeetingDetail): HTMLElement {
@@ -391,6 +667,8 @@ async function load(id: string) {
 }
 
 async function open(id: string) {
+  draft = null;
+  confirmingRewrite = false;
   openId = id;
   pane = "final";
   confirmingDelete = false;
@@ -400,6 +678,8 @@ async function open(id: string) {
 }
 
 async function close() {
+  draft = null;
+  confirmingRewrite = false;
   openId = null;
   detail = null;
   confirmingDelete = false;
@@ -413,6 +693,96 @@ async function openFolder() {
     await invoke("open_meeting_folder", { id: openId });
   } catch (e) {
     toast(errorText(e), true);
+  }
+}
+
+/** "Download" with a small menu of formats. */
+function downloadMenu(disabled: boolean): HTMLElement {
+  if (disabled) {
+    return h("button", { class: "btn", type: "button", disabled: true, title: "Write the final notes first" }, "Download");
+  }
+  const menu = h(
+    "details",
+    { class: "menu" },
+    h("summary", { class: "btn" }, "Download"),
+    h(
+      "div",
+      { class: "menu-list", role: "menu" },
+      h(
+        "button",
+        { type: "button", role: "menuitem", onclick: () => void download("markdown", menu) },
+        h("strong", {}, "Markdown (.md)"),
+        h("span", {}, "The notes, with a folder of their screenshots next to them"),
+      ),
+      h(
+        "button",
+        { type: "button", role: "menuitem", onclick: () => void download("zip", menu) },
+        h("strong", {}, "Zip (.zip)"),
+        h("span", {}, "Notes, screenshots and transcript in one file. Notion's Import takes it as is"),
+      ),
+    ),
+  ) as HTMLDetailsElement;
+  return menu;
+}
+
+function fileName(): string {
+  const title = detail?.final_notes?.title || detail?.item.title || "Meeting notes";
+  const clean = title.replace(/[\\/:*?"<>|]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 80);
+  return clean || "Meeting notes";
+}
+
+async function download(format: "markdown" | "zip", menu: HTMLDetailsElement) {
+  menu.open = false;
+  if (!openId) return;
+  const id = openId;
+  const ext = format === "zip" ? "zip" : "md";
+  const path = await save({
+    title: format === "zip" ? "Save notes as zip" : "Save notes as Markdown",
+    defaultPath: `${fileName()}.${ext}`,
+    filters: [{ name: format === "zip" ? "Zip archive" : "Markdown", extensions: [ext] }],
+  });
+  if (!path) return;
+  try {
+    const written = await invoke<string>("save_notes", { id, path, format });
+    toast(`Saved ${written}`);
+  } catch (e) {
+    toast(errorText(e), true);
+  }
+}
+
+let exporting = false;
+
+async function toNotion() {
+  if (!openId || exporting) return;
+  const id = openId;
+  const status = await invoke<{ connected: boolean; parent_id: string | null }>("notion_status");
+  if (!status.connected || !status.parent_id) {
+    showView("settings");
+    document.getElementById("notion-section")?.scrollIntoView({ behavior: "smooth" });
+    toast(
+      status.connected
+        ? "Choose the Notion page to export under first."
+        : "Connect Notion first: add your integration secret here.",
+      true,
+    );
+    return;
+  }
+  exporting = true;
+  render();
+  try {
+    const result = await invoke<{ url: string; skipped_images: number }>("notion_export", { id });
+    toast(
+      result.skipped_images > 0
+        ? `Exported to Notion; ${result.skipped_images} screenshot(s) could not be uploaded`
+        : "Exported to Notion",
+      result.skipped_images > 0,
+    );
+    if (openId === id) await load(id);
+  } catch (e) {
+    toast(errorText(e), true);
+  } finally {
+    exporting = false;
+    render();
   }
 }
 
@@ -475,6 +845,12 @@ export async function showMeetings(id?: string) {
 }
 
 export async function initMeetings() {
+  // Close an open Download menu when clicking anywhere else.
+  document.addEventListener("click", (e) => {
+    for (const menu of document.querySelectorAll<HTMLDetailsElement>("details.menu[open]")) {
+      if (!menu.contains(e.target as Node)) menu.open = false;
+    }
+  });
   await listen<FinalEvent>("meeting-final", (e) => void onFinal(e.payload));
   await listen("meeting-finished", () => {
     if (!$("view-meetings").hidden) void showMeetings();

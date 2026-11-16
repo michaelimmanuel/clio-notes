@@ -19,6 +19,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use storage::{KeyframeRow, Timeline, TranscriptLine};
 
+use crate::language::{NotesLanguage, Words};
 use crate::notes::{Bullet, BulletKind, Source, clock};
 use crate::screen::ScreenReading;
 
@@ -77,6 +78,8 @@ pub struct MeetingInput {
     pub sections: Vec<LiveSection>,
     pub keyframes: Vec<KeyframeRow>,
     pub transcript: Vec<TranscriptLine>,
+    /// The language the notes are written in.
+    pub notes_language: NotesLanguage,
 }
 
 #[derive(Debug, Clone)]
@@ -134,6 +137,7 @@ pub fn load(dir: &Path) -> Result<MeetingInput, String> {
         sections,
         keyframes,
         transcript,
+        notes_language: NotesLanguage::of(&timeline),
     })
 }
 
@@ -317,7 +321,7 @@ async fn generate(
     input: &MeetingInput,
 ) -> Result<(FinalNotes, Usage), String> {
     let request = TextRequest::new(prompt(input))
-        .system(SYSTEM)
+        .system(format!("{SYSTEM}\n{}", input.notes_language.rule()))
         .max_tokens(12_000)
         .json_schema("final_notes", schema());
     let mut usage = Usage::default();
@@ -570,32 +574,76 @@ fn slug(heading: &str) -> String {
     if s.is_empty() { "screen".into() } else { s }
 }
 
-fn source_mark(source: Source) -> &'static str {
+fn source_mark(source: Source, words: &Words) -> String {
     match source {
-        Source::Spoken => "",
-        Source::Screen => " *(on screen)*",
-        Source::Both => " *(said and shown)*",
+        Source::Spoken => String::new(),
+        Source::Screen => format!(" *({})*", words.on_screen),
+        Source::Both => format!(" *({})*", words.said_and_shown),
     }
 }
 
 /// The local date and time a meeting started, for headers.
 pub fn local_time(unix_ms: u64) -> String {
-    use chrono::{Local, TimeZone};
+    local_time_in(unix_ms, NotesLanguage::English)
+}
+
+/// [`local_time`] with day and month names in `language`.
+pub fn local_time_in(unix_ms: u64, language: NotesLanguage) -> String {
+    use chrono::{Datelike, Local, TimeZone};
     match Local.timestamp_millis_opt(unix_ms as i64) {
-        chrono::LocalResult::Single(t) => t.format("%A %-d %B %Y, %H:%M").to_string(),
+        chrono::LocalResult::Single(t) => {
+            let words = language.words();
+            format!(
+                "{} {} {} {}, {}",
+                words.days[t.weekday().num_days_from_monday() as usize],
+                t.day(),
+                words.months[t.month0() as usize],
+                t.year(),
+                t.format("%H:%M")
+            )
+        }
         _ => String::new(),
     }
 }
 
 /// The final notes as Markdown, with image links relative to the folder.
 pub fn markdown(notes: &FinalNotes, input: &MeetingInput) -> String {
-    let mut md = format!("# {}\n\n", notes.title);
+    render(notes, input, "images", true)
+}
+
+/// The final notes as Markdown for a copy saved outside the meeting folder:
+/// images are linked from `image_dir` (relative to the saved file, `/`
+/// separated), and the footer has no links to the transcript and live notes,
+/// which are not copied.
+pub fn markdown_standalone(notes: &FinalNotes, input: &MeetingInput, image_dir: &str) -> String {
+    render(notes, input, image_dir, false)
+}
+
+/// One line under the title: when the meeting started and how long it took.
+pub fn header_line(input: &MeetingInput) -> String {
     let mut line = Vec::new();
     if let Some(start) = input.started_at_unix_ms {
-        line.push(local_time(start));
+        line.push(local_time_in(start, input.notes_language));
     }
-    line.push(format!("{} long", duration(input.duration_ms)));
-    md.push_str(&format!("*{}*\n\n", line.join(" · ")));
+    line.push(match input.notes_language {
+        NotesLanguage::English => format!("{} long", duration(input.duration_ms, "min", "h")),
+        NotesLanguage::Indonesian => {
+            format!("durasi {}", duration(input.duration_ms, "menit", "jam"))
+        }
+    });
+    line.join(" · ")
+}
+
+/// Spaces in a Markdown link target break the link; `%20` does not.
+fn link_path(path: &str) -> String {
+    path.replace(' ', "%20")
+}
+
+fn render(notes: &FinalNotes, input: &MeetingInput, image_dir: &str, links: bool) -> String {
+    let words = input.notes_language.words();
+    let source_mark = |s: Source| source_mark(s, words);
+    let mut md = format!("# {}\n\n", notes.title);
+    md.push_str(&format!("*{}*\n\n", header_line(input)));
     if let Some(note) = &notes.note {
         md.push_str(&format!("> {note}\n\n"));
     }
@@ -603,14 +651,14 @@ pub fn markdown(notes: &FinalNotes, input: &MeetingInput) -> String {
         md.push_str(&format!("{}\n\n", notes.summary));
     }
     if !notes.decisions.is_empty() {
-        md.push_str("## Decisions\n\n");
+        md.push_str(&format!("## {}\n\n", words.decisions));
         for d in &notes.decisions {
             md.push_str(&format!("- {}{}\n", d.text, source_mark(d.source)));
         }
         md.push('\n');
     }
     if !notes.actions.is_empty() {
-        md.push_str("## Action items\n\n");
+        md.push_str(&format!("## {}\n\n", words.action_items));
         for a in &notes.actions {
             let owner = if a.owner.is_empty() {
                 String::new()
@@ -633,10 +681,12 @@ pub fn markdown(notes: &FinalNotes, input: &MeetingInput) -> String {
             clock(t.end_ms)
         ));
         if let Some(image) = t.image.as_ref().filter(|i| !i.file.is_empty()) {
+            let name = image.file.strip_prefix("images/").unwrap_or(&image.file);
             md.push_str(&format!(
-                "![Screen at {}]({})\n\n",
+                "![{} {}]({})\n\n",
+                words.screen_at,
                 clock(image.t_ms),
-                image.file
+                link_path(&format!("{image_dir}/{name}"))
             ));
         }
         for b in &t.bullets {
@@ -644,10 +694,14 @@ pub fn markdown(notes: &FinalNotes, input: &MeetingInput) -> String {
         }
         md.push('\n');
     }
-    md.push_str(
-        "---\n\n*Written by Clio Notes. Points marked \"on screen\" were shown but not said. \
-         Full [transcript](transcript.md) · [live notes](notes-live.md).*\n",
-    );
+    if links {
+        md.push_str(&format!(
+            "---\n\n*{} [{}](transcript.md) · [{}](notes-live.md).*\n",
+            words.footer, words.transcript, words.live_notes
+        ));
+    } else {
+        md.push_str(&format!("---\n\n*{}*\n", words.footer));
+    }
     md
 }
 
@@ -671,7 +725,8 @@ pub fn transcript_markdown(input: &MeetingInput) -> String {
         .collect();
     entries.sort_by_key(|(t, _)| *t);
 
-    let mut md = String::from("# Transcript\n\n");
+    let words = input.notes_language.words();
+    let mut md = format!("# {}\n\n", words.transcript);
     for (t, entry) in entries {
         match entry {
             Entry::Line(l) => md.push_str(&format!(
@@ -693,19 +748,23 @@ pub fn transcript_markdown(input: &MeetingInput) -> String {
                         }
                     })
                     .unwrap_or_default();
-                md.push_str(&format!("*[{}] Screen changed: {title}*\n\n", clock(t)));
+                md.push_str(&format!(
+                    "*[{}] {}: {title}*\n\n",
+                    clock(t),
+                    words.screen_changed
+                ));
             }
         }
     }
     md
 }
 
-fn duration(ms: u64) -> String {
+fn duration(ms: u64, min: &str, hour: &str) -> String {
     let minutes = (ms + 30_000) / 60_000;
     match minutes {
         0 => format!("{} s", ms / 1000),
-        m if m < 60 => format!("{m} min"),
-        m => format!("{} h {} min", m / 60, m % 60),
+        m if m < 60 => format!("{m} {min}"),
+        m => format!("{} {hour} {} {min}", m / 60, m % 60),
     }
 }
 
@@ -864,6 +923,12 @@ mod tests {
         );
         let md = std::fs::read_to_string(dir.join("notes.md")).unwrap();
         assert!(md.contains("> No profile is assigned"));
+        assert!(md.contains("(images/01-budget.png)"));
+
+        // A copy saved elsewhere links its own image folder and nothing else.
+        let copy = markdown_standalone(&notes, &load(&dir).unwrap(), "Budget notes images");
+        assert!(copy.contains("(Budget%20notes%20images/01-budget.png)"));
+        assert!(!copy.contains("transcript.md"));
 
         // A broken reply falls back the same way.
         let broken = FakeWriter("not json".into());
@@ -880,6 +945,24 @@ mod tests {
         assert!(p.contains("Section 2 [02:00–04:00] \"Budget continued\""));
         assert!(p.contains("- (decision, spoken) Keep the budget"));
         assert!(p.contains("Screen 1 [00:01] slides: \"Q3 budget\". Budget slide"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn notes_language_is_stored_and_used() {
+        let dir = meeting();
+        Timeline::open(&dir.join("timeline.sqlite"))
+            .unwrap()
+            .set_meta(crate::language::NOTES_LANGUAGE, "id")
+            .unwrap();
+        let input = load(&dir).unwrap();
+        assert_eq!(input.notes_language, NotesLanguage::Indonesian);
+        let md = markdown(&from_live(&input, None), &input);
+        assert!(md.contains("## Keputusan"), "{md}");
+        assert!(md.contains("durasi 5 menit"), "{md}");
+        assert!(md.contains("*(di layar)*"), "{md}");
+        assert!(md.contains("[Transkrip](transcript.md)"), "{md}");
+        assert!(transcript_markdown(&input).starts_with("# Transkrip"));
         std::fs::remove_dir_all(dir).unwrap();
     }
 
