@@ -201,6 +201,11 @@ strong {
   font-weight: 700;
 }
 
+.mark-c {
+  width: 15px;
+  height: auto;
+}
+
 .tabs {
   display: flex;
   gap: 2px;
