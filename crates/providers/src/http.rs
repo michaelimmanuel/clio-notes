@@ -49,18 +49,130 @@ pub(crate) async fn send_json(
             Ok(v) => return Ok(v),
             Err(e) => e,
         };
-        if !err.is_retryable() || attempt >= policy.max_retries {
-            return Err(err);
-        }
-        let delay = match &err {
-            ProviderError::RateLimited {
-                retry_after_secs: Some(s),
-                ..
-            } => Duration::from_secs(*s),
-            _ => policy.base_delay * 2u32.pow(attempt),
+        wait_before_retry(policy, &mut attempt, err).await?;
+    }
+}
+
+/// Sleeps before the next attempt, or gives the error back when it should
+/// not be retried.
+async fn wait_before_retry(
+    policy: RetryPolicy,
+    attempt: &mut u32,
+    err: ProviderError,
+) -> Result<()> {
+    if !err.is_retryable() || *attempt >= policy.max_retries {
+        return Err(err);
+    }
+    let delay = match &err {
+        ProviderError::RateLimited {
+            retry_after_secs: Some(s),
+            ..
+        } => Duration::from_secs(*s),
+        _ => policy.base_delay * 2u32.pow(*attempt),
+    };
+    tokio::time::sleep(delay.min(policy.max_delay)).await;
+    *attempt += 1;
+    Ok(())
+}
+
+/// How long a streamed answer may take in all. Text keeps arriving, so this
+/// is longer than the client's default.
+pub(crate) const STREAM_TIMEOUT: Duration = Duration::from_secs(600);
+
+/// Sends a request whose response is a stream of server-sent events.
+///
+/// Opening the stream is retried like [`send_json`]. Once it is open, the
+/// `data` of each event is handed to `on_data` until it returns `Ok(false)`,
+/// fails, or the stream ends. A broken stream is not retried, since part of
+/// the answer has already been handed over.
+pub(crate) async fn send_sse(
+    policy: RetryPolicy,
+    model: &str,
+    build: impl Fn() -> reqwest::RequestBuilder,
+    mut on_data: impl FnMut(&str) -> Result<bool>,
+) -> Result<()> {
+    let mut attempt = 0;
+    let mut response = loop {
+        let err = match open_stream(model, build()).await {
+            Ok(r) => break r,
+            Err(e) => e,
         };
-        tokio::time::sleep(delay.min(policy.max_delay)).await;
-        attempt += 1;
+        wait_before_retry(policy, &mut attempt, err).await?;
+    };
+    let mut events = SseBuffer::default();
+    while let Some(chunk) = response.chunk().await.map_err(transport_error)? {
+        for data in events.push(&chunk) {
+            if !on_data(&data)? {
+                return Ok(());
+            }
+        }
+    }
+    for data in events.finish() {
+        if !on_data(&data)? {
+            break;
+        }
+    }
+    Ok(())
+}
+
+async fn open_stream(model: &str, request: reqwest::RequestBuilder) -> Result<reqwest::Response> {
+    let response = request.send().await.map_err(transport_error)?;
+    let status = response.status();
+    if status.is_success() {
+        return Ok(response);
+    }
+    let headers = response.headers().clone();
+    let body = response.text().await.map_err(transport_error)?;
+    Err(classify(status.as_u16(), &headers, &body, model))
+}
+
+/// Splits a server-sent event stream into the `data` of each event. Bytes are
+/// kept until a whole line has arrived, so a character split across two
+/// chunks is decoded correctly.
+#[derive(Default)]
+pub(crate) struct SseBuffer {
+    pending: Vec<u8>,
+    data: Option<String>,
+}
+
+impl SseBuffer {
+    pub(crate) fn push(&mut self, bytes: &[u8]) -> Vec<String> {
+        self.pending.extend_from_slice(bytes);
+        let mut out = Vec::new();
+        while let Some(end) = self.pending.iter().position(|&b| b == b'\n') {
+            let line: Vec<u8> = self.pending.drain(..=end).collect();
+            let line = String::from_utf8_lossy(&line[..end]);
+            self.line(line.trim_end_matches('\r'), &mut out);
+        }
+        out
+    }
+
+    pub(crate) fn finish(&mut self) -> Vec<String> {
+        let mut out = Vec::new();
+        if !self.pending.is_empty() {
+            let rest = std::mem::take(&mut self.pending);
+            let line = String::from_utf8_lossy(&rest).into_owned();
+            self.line(line.trim_end_matches('\r'), &mut out);
+        }
+        out.extend(self.data.take());
+        out
+    }
+
+    fn line(&mut self, line: &str, out: &mut Vec<String>) {
+        if line.is_empty() {
+            out.extend(self.data.take());
+        } else if let Some(value) = line.strip_prefix("data:") {
+            let value = value.strip_prefix(' ').unwrap_or(value);
+            match &mut self.data {
+                Some(data) => {
+                    data.push('\n');
+                    data.push_str(value);
+                }
+                None => self.data = Some(value.to_string()),
+            }
+        }
+        // `event:`, `id:`, `retry:` and `:` comments carry nothing the
+        // adapters need: the event type is repeated inside the data.
     }
 }
 
@@ -255,6 +367,18 @@ mod tests {
                 .contains("Provider returned 403 by OpenAI: Region not supported"),
             "{e}"
         );
+    }
+
+    #[test]
+    fn sse_events_survive_split_chunks_and_comments() {
+        let mut b = SseBuffer::default();
+        let mut got = b.push(b": OPENROUTER PROCESSING\n\nevent: x\r\ndata: {\"a\":");
+        assert!(got.is_empty());
+        // "é" is two bytes, split across chunks.
+        got.extend(b.push(b"1}\r\n\r\ndata: caf\xC3"));
+        got.extend(b.push(b"\xA9\ndata: two\n\ndata: [DONE]"));
+        got.extend(b.finish());
+        assert_eq!(got, vec!["{\"a\":1}", "caf\u{e9}\ntwo", "[DONE]"]);
     }
 
     #[test]

@@ -154,7 +154,7 @@ pub(crate) fn id_of(dir: &Path) -> String {
         .unwrap_or_default()
 }
 
-fn recording_id(app: &AppHandle) -> Option<String> {
+pub(crate) fn recording_id(app: &AppHandle) -> Option<String> {
     app.state::<MeetingState>()
         .running_dir()
         .map(|d| id_of(Path::new(&d)))
@@ -299,7 +299,7 @@ pub async fn meeting_image(
 }
 
 /// The text generator assigned in Settings, if any.
-fn writer(state: &AppState) -> Result<Option<Arc<dyn TextGenerator>>, UiError> {
+pub(crate) fn writer(state: &AppState) -> Result<Option<Arc<dyn TextGenerator>>, UiError> {
     let settings = state.store.load()?;
     Ok(match settings.assigned(Role::Text) {
         Some(p) => {
@@ -318,7 +318,7 @@ fn stored_usage(timeline: &Timeline) -> Option<MeetingUsage> {
 }
 
 /// Adds to the usage stored with the meeting.
-fn add_usage(dir: &Path, change: impl FnOnce(&mut MeetingUsage)) {
+pub(crate) fn add_usage(dir: &Path, change: impl FnOnce(&mut MeetingUsage)) {
     let Ok(timeline) = Timeline::open(&dir.join("timeline.sqlite")) else {
         return;
     };

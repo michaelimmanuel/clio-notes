@@ -26,9 +26,28 @@ pub use openai::OpenAiClient;
 pub use profile::{Profile, ProviderKind, RoleAssignments, Settings, SettingsStore};
 pub use types::*;
 
+/// Receives the answer's text as it is written, one piece at a time.
+pub type OnText<'a> = &'a (dyn Fn(&str) + Send + Sync);
+
 #[async_trait]
 pub trait TextGenerator: Send + Sync {
     async fn generate(&self, request: &TextRequest) -> Result<TextResponse>;
+
+    /// Like [`TextGenerator::generate`], but hands each piece of text to
+    /// `on_text` as it arrives. The returned response holds the whole text.
+    ///
+    /// If this fails after some text was handed over, that text is not part of
+    /// an answer and should be discarded. The default sends the whole answer
+    /// at once.
+    async fn generate_streaming(
+        &self,
+        request: &TextRequest,
+        on_text: OnText<'_>,
+    ) -> Result<TextResponse> {
+        let response = self.generate(request).await?;
+        on_text(&response.text);
+        Ok(response)
+    }
 }
 
 #[async_trait]

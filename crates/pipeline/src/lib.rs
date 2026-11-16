@@ -11,6 +11,7 @@
 //! - Hardening (M6): retry through provider outages and count usage
 //!   ([`resilient`]); finish an interrupted meeting ([`recover`]).
 
+pub mod ask;
 pub mod final_pass;
 pub mod language;
 pub mod notes;

@@ -111,6 +111,18 @@ impl KeyframeRow {
     }
 }
 
+/// One question asked about the meeting, with its answer.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ChatRow {
+    pub id: i64,
+    pub question: String,
+    pub answer: String,
+    /// The model that answered.
+    pub model: String,
+    /// When the question was asked, in Unix milliseconds.
+    pub asked_at: u64,
+}
+
 /// One section of the live notes.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SectionRow {
@@ -126,7 +138,7 @@ pub struct SectionRow {
     pub model: String,
 }
 
-const SCHEMA_VERSION: i64 = 3;
+const SCHEMA_VERSION: i64 = 4;
 
 /// The event log of one meeting.
 pub struct Timeline {
@@ -199,6 +211,18 @@ impl Timeline {
                      created_at INTEGER NOT NULL
                  );
                  PRAGMA user_version = 3;",
+            )?;
+        }
+        if version < 4 {
+            conn.execute_batch(
+                "CREATE TABLE chat (
+                     id       INTEGER PRIMARY KEY,
+                     question TEXT    NOT NULL,
+                     answer   TEXT    NOT NULL,
+                     model    TEXT    NOT NULL,
+                     asked_at INTEGER NOT NULL
+                 );
+                 PRAGMA user_version = 4;",
             )?;
         }
         Ok(Self { conn })
@@ -353,6 +377,49 @@ impl Timeline {
         Ok(rows.collect::<std::result::Result<_, _>>()?)
     }
 
+    /// Stores an answered question and returns it with its id.
+    pub fn add_chat(
+        &self,
+        question: &str,
+        answer: &str,
+        model: &str,
+        asked_at: u64,
+    ) -> Result<ChatRow> {
+        self.conn.execute(
+            "INSERT INTO chat (question, answer, model, asked_at) VALUES (?1, ?2, ?3, ?4)",
+            params![question, answer, model, asked_at as i64],
+        )?;
+        Ok(ChatRow {
+            id: self.conn.last_insert_rowid(),
+            question: question.into(),
+            answer: answer.into(),
+            model: model.into(),
+            asked_at,
+        })
+    }
+
+    /// Every answered question, oldest first.
+    pub fn chat(&self) -> Result<Vec<ChatRow>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, question, answer, model, asked_at FROM chat ORDER BY id")?;
+        let rows = stmt.query_map([], |r| {
+            Ok(ChatRow {
+                id: r.get(0)?,
+                question: r.get(1)?,
+                answer: r.get(2)?,
+                model: r.get(3)?,
+                asked_at: r.get::<_, i64>(4)? as u64,
+            })
+        })?;
+        Ok(rows.collect::<std::result::Result<_, _>>()?)
+    }
+
+    pub fn clear_chat(&self) -> Result<()> {
+        self.conn.execute("DELETE FROM chat", [])?;
+        Ok(())
+    }
+
     pub fn set_meta(&self, key: &str, value: &str) -> Result<()> {
         self.conn.execute(
             "INSERT INTO meta (key, value) VALUES (?1, ?2)
@@ -430,6 +497,22 @@ mod tests {
         ));
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn chat_round_trips_and_clears() {
+        let dir = temp_dir("chat");
+        let t = Timeline::open(&dir.join("timeline.sqlite")).unwrap();
+        let first = t
+            .add_chat("What was decided?", "Ship Friday.", "m", 5)
+            .unwrap();
+        t.add_chat("Who owns it?", "Ana.", "m", 6).unwrap();
+        let rows = t.chat().unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0], first);
+        assert_eq!(rows[1].answer, "Ana.");
+        t.clear_chat().unwrap();
+        assert!(t.chat().unwrap().is_empty());
     }
 
     #[test]

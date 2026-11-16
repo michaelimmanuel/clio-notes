@@ -20,6 +20,9 @@ choose.
   into Obsidian, Confluence or an email.
 - **Edit before you share.** Fix a name, reword a point, add or remove decisions, action items,
   topics and screenshots. `notes.md` is updated when you save.
+- **Ask about a meeting.** Ask "what did we decide about pricing?" or "what are my action
+  items?" and get an answer from that meeting, with the times it comes from. Click a time to
+  see that point of the transcript.
 - **Download or send to Notion.** Save a meeting's notes as Markdown or as a zip, or export
   them as a Notion page with their screenshots.
 - **Screens read, not just pictured.** Slide titles, text, tables, code and terms are read from
@@ -105,6 +108,28 @@ To connect Notion, open **Settings > Notion** and follow the steps there:
    integration. Then pick that page in Settings.
 
 The secret is kept in your system's key store, like your AI keys.
+
+## Asking about a meeting
+
+Open a meeting under **Meeting notes** and click the **Ask about this meeting** bar at the bottom
+of the window. Type a question, or start with one of the suggestions. The answer is written as
+you watch, above the bar, and follow-up questions work ("and who owns that?"). Press Esc or
+click elsewhere to close the answers; the bar shows how many there are, so you can reopen them.
+
+- Answers come only from that meeting: its notes, the text read from its screens, and the
+  transcript. When the meeting doesn't say, the answer says so.
+- Each point cites its time, like `[12:34]`. Click it to jump to that line of the transcript.
+- Ask in English or Indonesian; the answer is in the language of the question.
+- Questions are answered by the **Notes writing** model you chose in Settings, so the meeting is
+  sent only to a provider that already writes its notes. With Anthropic, and with Anthropic
+  or Gemini models through OpenRouter, the meeting is cached between questions, so follow-ups
+  cost less.
+- Questions and answers are kept with the meeting, in `timeline.sqlite`. They are not added to
+  `notes.md`, downloads or Notion exports. **Clear chat** deletes them.
+- Questions are counted under **Usage** as "Questions".
+
+A meeting's transcript of more than about six hours is shortened to fit: its start and end are
+kept, and the notes still cover the middle.
 
 ## Reliability
 

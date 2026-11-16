@@ -1,11 +1,12 @@
 // The Meetings view: past meetings, their final notes, live notes and
 // transcript, and the actions on them (open folder, download, export to
-// Notion, rewrite final notes, move to the Recycle Bin).
+// Notion, rewrite final notes, move to the Recycle Bin), and the Ask bar.
 
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { save } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { askView, initAsk } from "./ask";
 import { $, errorText, h, toast } from "./dom";
 import { showView } from "./meeting";
 import { type MeetingUsage, usageLines } from "./usage";
@@ -285,7 +286,14 @@ function detailView(d: MeetingDetail): HTMLElement {
         ),
       ),
     ),
-    draft ? editorView(d, draft) : pane === "final" ? finalView(d) : pane === "live" ? liveView(d) : transcriptView(d),
+    draft
+      ? editorView(d, draft)
+      : pane === "final"
+        ? finalView(d)
+        : pane === "live"
+          ? liveView(d)
+          : transcriptView(d),
+    draft ? null : askView(m.id, m.status === "recording" ? "Stop the meeting to ask about it." : null, jumpTo),
   );
 }
 
@@ -609,7 +617,7 @@ function transcriptView(d: MeetingDetail): HTMLElement {
       t: l.start_ms,
       el: h(
         "div",
-        { class: "line done" },
+        { class: "line done", "data-t": String(l.start_ms) },
         h("span", { class: "line-time mono" }, clock(l.start_ms)),
         h("span", { class: `speaker ${l.speaker}` }, l.speaker === "me" ? "Me" : "Others"),
         h("span", { class: "line-text" }, l.text),
@@ -619,7 +627,7 @@ function transcriptView(d: MeetingDetail): HTMLElement {
       t: k.t_ms,
       el: h(
         "div",
-        { class: "line shot read" },
+        { class: "line shot read", "data-t": String(k.t_ms) },
         h("span", { class: "line-time mono" }, clock(k.t_ms)),
         h("span", { class: "speaker screen" }, "Screen"),
         h("span", { class: "line-text shot-note" }, k.title || "Screen changed"),
@@ -628,6 +636,23 @@ function transcriptView(d: MeetingDetail): HTMLElement {
   ].sort((a, b) => a.t - b.t);
   if (entries.length === 0) return h("div", { class: "card empty" }, "Nothing was transcribed.");
   return h("div", { class: "card transcript" }, ...entries.map((e) => e.el));
+}
+
+/** Shows the transcript at `ms`: the last line that starts at or before it. */
+function jumpTo(ms: number) {
+  pane = "transcript";
+  render();
+  const lines = [...document.querySelectorAll<HTMLElement>("#view-meetings .transcript [data-t]")];
+  let target = lines[0];
+  for (const el of lines) {
+    if (Number(el.dataset.t) <= ms + 999) target = el;
+    else break;
+  }
+  if (!target) return;
+  target.scrollIntoView({ block: "center", behavior: "smooth" });
+  target.classList.remove("flash");
+  void target.offsetWidth;
+  target.classList.add("flash");
 }
 
 async function loadImage(id: string, file: string, img: HTMLImageElement) {
@@ -852,6 +877,7 @@ export async function initMeetings() {
     }
   });
   await listen<FinalEvent>("meeting-final", (e) => void onFinal(e.payload));
+  await initAsk();
   await listen("meeting-finished", () => {
     if (!$("view-meetings").hidden) void showMeetings();
   });

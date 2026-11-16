@@ -1,5 +1,6 @@
 use tauri::{Emitter, Manager};
 
+mod ask;
 mod devices;
 mod export;
 mod logging;
@@ -21,6 +22,7 @@ pub fn run() {
         .manage(state)
         .manage(meeting::MeetingState::default())
         .manage(meetings::Finalizing::default())
+        .manage(ask::Asking::default())
         .on_window_event(|window, event| {
             // Closing the window would end the recording without its notes.
             if let tauri::WindowEvent::CloseRequested { api, .. } = event
@@ -50,6 +52,9 @@ pub fn run() {
             meetings::open_meeting_folder,
             meetings::delete_meeting,
             meetings::open_logs_folder,
+            ask::chat_history,
+            ask::ask_meeting,
+            ask::clear_chat,
             export::save_notes,
             notion::notion_status,
             notion::notion_connect,

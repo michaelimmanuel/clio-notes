@@ -17,7 +17,7 @@ use crate::http::{self, RetryPolicy};
 use crate::types::{
     CheckResult, TextRequest, TextResponse, TranscribeRequest, Transcript, TranscriptSegment, Usage,
 };
-use crate::{SpeechToText, TextGenerator};
+use crate::{OnText, SpeechToText, TextGenerator};
 
 pub const DEFAULT_BASE_URL: &str = "https://api.openai.com/v1";
 /// OpenAI's current transcription model; the older ones (including
@@ -101,7 +101,22 @@ impl OpenAiClient {
     pub(crate) fn chat_body(&self, req: &TextRequest) -> Value {
         let mut messages = Vec::new();
         if let Some(system) = &req.system {
-            messages.push(json!({ "role": "system", "content": system }));
+            // OpenAI and most compatible servers cache long prompts by
+            // themselves. OpenRouter passes `cache_control` on to the
+            // providers that need it, such as Anthropic and Gemini.
+            let content = if req.cache_system && self.flavor == Flavor::OpenRouter {
+                json!([{
+                    "type": "text",
+                    "text": system,
+                    "cache_control": { "type": "ephemeral" },
+                }])
+            } else {
+                json!(system)
+            };
+            messages.push(json!({ "role": "system", "content": content }));
+        }
+        for turn in &req.history {
+            messages.push(json!({ "role": turn.role.as_str(), "content": turn.text }));
         }
         let user = if req.images.is_empty() {
             json!(req.prompt)
@@ -265,6 +280,116 @@ impl TextGenerator for OpenAiClient {
         .await?;
         parse_chat(&v, &self.model)
     }
+
+    async fn generate_streaming(
+        &self,
+        req: &TextRequest,
+        on_text: OnText<'_>,
+    ) -> Result<TextResponse> {
+        let mut body = self.chat_body(req);
+        body["stream"] = json!(true);
+        body["stream_options"] = json!({ "include_usage": true });
+        let mut stream = ChatStream::default();
+        http::send_sse(
+            self.retry,
+            &self.model,
+            || {
+                self.request(reqwest::Method::POST, "chat/completions")
+                    .json(&body)
+                    .timeout(http::STREAM_TIMEOUT)
+            },
+            |data| stream.event(data, on_text, &self.model),
+        )
+        .await?;
+        stream.finish(&self.model)
+    }
+}
+
+/// What has arrived so far of a streamed chat completion.
+#[derive(Default)]
+struct ChatStream {
+    text: String,
+    model: Option<String>,
+    usage: Usage,
+    finished: bool,
+}
+
+impl ChatStream {
+    /// Reads one chunk. Returns `Ok(false)` at `[DONE]`.
+    fn event(&mut self, data: &str, on_text: OnText<'_>, model: &str) -> Result<bool> {
+        if data.trim() == "[DONE]" {
+            return Ok(false);
+        }
+        let v: Value = serde_json::from_str(data)
+            .map_err(|e| ProviderError::invalid_response(format!("{e} in stream chunk")))?;
+        // OpenRouter reports a failure after the stream has started as a
+        // chunk with an `error` object.
+        if v["error"].is_object() {
+            let status = v["error"]["code"].as_u64().unwrap_or(502) as u16;
+            return Err(http::classify(
+                status,
+                &reqwest::header::HeaderMap::new(),
+                data,
+                model,
+            ));
+        }
+        if let Some(m) = v["model"].as_str() {
+            self.model = Some(m.to_string());
+        }
+        if v["usage"].is_object() {
+            self.usage = Usage {
+                input_tokens: v["usage"]["prompt_tokens"].as_u64().unwrap_or(0),
+                output_tokens: v["usage"]["completion_tokens"].as_u64().unwrap_or(0),
+            };
+        }
+        let choice = &v["choices"][0];
+        if let Some(refusal) = choice["delta"]["refusal"]
+            .as_str()
+            .filter(|r| !r.is_empty())
+        {
+            return Err(ProviderError::Refused {
+                detail: refusal.to_string(),
+            });
+        }
+        if let Some(text) = choice["delta"]["content"]
+            .as_str()
+            .filter(|t| !t.is_empty())
+        {
+            self.text.push_str(text);
+            on_text(text);
+        }
+        match choice["finish_reason"].as_str() {
+            None => {}
+            Some("length") => return Err(ProviderError::Truncated),
+            Some("content_filter") => {
+                return Err(ProviderError::Refused {
+                    detail: "The provider's content filter blocked the response.".into(),
+                });
+            }
+            Some("error") => {
+                return Err(ProviderError::Unavailable {
+                    status: 502,
+                    detail: "The upstream provider failed while generating.".into(),
+                });
+            }
+            // Usage follows in a last chunk, so keep reading.
+            Some(_) => self.finished = true,
+        }
+        Ok(true)
+    }
+
+    fn finish(self, requested_model: &str) -> Result<TextResponse> {
+        if !self.finished {
+            return Err(ProviderError::invalid_response(
+                "the answer stopped before it was complete",
+            ));
+        }
+        Ok(TextResponse {
+            text: self.text,
+            model: self.model.unwrap_or_else(|| requested_model.to_string()),
+            usage: self.usage,
+        })
+    }
 }
 
 #[async_trait]
@@ -389,6 +514,102 @@ mod tests {
         assert_eq!(b["max_completion_tokens"], 500);
         assert_eq!(b["reasoning_effort"], "low");
         assert_eq!(b["response_format"]["json_schema"]["strict"], true);
+    }
+
+    #[test]
+    fn history_follows_system_and_only_openrouter_marks_the_cache() {
+        use crate::types::{Turn, TurnRole};
+        let req = TextRequest::new("And then?")
+            .system("ctx")
+            .cache_system()
+            .history(vec![
+                Turn {
+                    role: TurnRole::User,
+                    text: "Q".into(),
+                },
+                Turn {
+                    role: TurnRole::Assistant,
+                    text: "A".into(),
+                },
+            ]);
+        let plain = OpenAiClient::new(http::client(), None, None, "m", None, false).chat_body(&req);
+        assert_eq!(plain["messages"][0]["content"], "ctx");
+        assert_eq!(plain["messages"][1]["role"], "user");
+        assert_eq!(plain["messages"][2]["role"], "assistant");
+        assert_eq!(plain["messages"][3]["content"], "And then?");
+        let or =
+            OpenAiClient::openrouter(http::client(), None, "k".into(), "m", None).chat_body(&req);
+        assert_eq!(
+            or["messages"][0]["content"][0]["cache_control"]["type"],
+            "ephemeral"
+        );
+    }
+
+    #[tokio::test]
+    async fn streaming_reads_deltas_usage_and_done() {
+        let mut server = mockito::Server::new_async().await;
+        let chunks = [
+            json!({"model": "gpt-x", "choices": [{"delta": {"role": "assistant", "content": ""}}]}),
+            json!({"choices": [{"delta": {"content": "Ship "}}]}),
+            json!({"choices": [{"delta": {"content": "Friday."}, "finish_reason": "stop"}]}),
+            json!({"choices": [], "usage": {"prompt_tokens": 50, "completion_tokens": 4}}),
+        ];
+        let mut body: String = chunks.iter().map(|c| format!("data: {c}\n\n")).collect();
+        body = format!(": OPENROUTER PROCESSING\n\n{body}data: [DONE]\n\n");
+        let m = server
+            .mock("POST", "/chat/completions")
+            .match_body(Matcher::PartialJson(
+                json!({"stream": true, "stream_options": {"include_usage": true}}),
+            ))
+            .with_body(body)
+            .create_async()
+            .await;
+        let pieces = std::sync::Mutex::new(String::new());
+        let on_text = |t: &str| pieces.lock().unwrap().push_str(t);
+        let r = client(&server, "gpt-x")
+            .generate_streaming(&TextRequest::new("Hi"), &on_text)
+            .await
+            .unwrap();
+        m.assert_async().await;
+        assert_eq!(*pieces.lock().unwrap(), "Ship Friday.");
+        assert_eq!(r.text, "Ship Friday.");
+        assert_eq!(
+            r.usage,
+            Usage {
+                input_tokens: 50,
+                output_tokens: 4
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn streaming_error_chunk_and_cut_off_stream_are_errors() {
+        let mut server = mockito::Server::new_async().await;
+        server
+            .mock("POST", "/chat/completions")
+            .with_body("data: {\"error\":{\"code\":502,\"message\":\"Upstream died\"}}\n\n")
+            .create_async()
+            .await;
+        let e = client(&server, "m")
+            .generate_streaming(&TextRequest::new("x"), &|_| {})
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(e, ProviderError::Unavailable { status: 502, .. }),
+            "{e:?}"
+        );
+
+        let mut server = mockito::Server::new_async().await;
+        server
+            .mock("POST", "/chat/completions")
+            .with_body("data: {\"choices\":[{\"delta\":{\"content\":\"Par\"}}]}\n\n")
+            .create_async()
+            .await;
+        let e = client(&server, "m")
+            .generate_streaming(&TextRequest::new("x"), &|_| {})
+            .await
+            .unwrap_err();
+        assert!(matches!(e, ProviderError::InvalidResponse { .. }), "{e:?}");
     }
 
     #[test]

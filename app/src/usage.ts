@@ -15,6 +15,7 @@ export interface MeetingUsage {
   vision: RoleUsage;
   text: RoleUsage;
   final: RoleUsage;
+  questions?: RoleUsage;
 }
 
 const LABELS: [keyof MeetingUsage, string][] = [
@@ -22,6 +23,7 @@ const LABELS: [keyof MeetingUsage, string][] = [
   ["vision", "Screen reading"],
   ["text", "Live notes"],
   ["final", "Final notes"],
+  ["questions", "Questions"],
 ];
 
 function count(n: number): string {

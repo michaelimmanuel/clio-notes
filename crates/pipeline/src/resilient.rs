@@ -66,6 +66,8 @@ pub struct MeetingUsage {
     /// The end-of-meeting pass (also a text-generation call).
     #[serde(rename = "final")]
     pub final_pass: RoleUsage,
+    /// Questions asked about the meeting afterwards.
+    pub questions: RoleUsage,
 }
 
 impl MeetingUsage {

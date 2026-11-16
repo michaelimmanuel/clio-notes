@@ -68,29 +68,71 @@ pub struct JsonSchema {
     pub schema: serde_json::Value,
 }
 
+/// Who wrote one turn of a conversation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TurnRole {
+    User,
+    Assistant,
+}
+
+impl TurnRole {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TurnRole::User => "user",
+            TurnRole::Assistant => "assistant",
+        }
+    }
+}
+
+/// One earlier turn of a conversation, sent before the prompt.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Turn {
+    pub role: TurnRole,
+    pub text: String,
+}
+
 #[derive(Debug, Clone)]
 pub struct TextRequest {
     pub system: Option<String>,
+    /// Earlier turns, oldest first, alternating user and assistant. The prompt
+    /// is the next user turn.
+    pub history: Vec<Turn>,
     pub prompt: String,
     /// Placed before the prompt text.
     pub images: Vec<ImageInput>,
     pub max_tokens: u32,
     pub json_schema: Option<JsonSchema>,
+    /// The system prompt is long and sent again with follow-up requests, so
+    /// providers that support it should cache it.
+    pub cache_system: bool,
 }
 
 impl TextRequest {
     pub fn new(prompt: impl Into<String>) -> Self {
         Self {
             system: None,
+            history: Vec::new(),
             prompt: prompt.into(),
             images: Vec::new(),
             max_tokens: 16_000,
             json_schema: None,
+            cache_system: false,
         }
     }
 
     pub fn system(mut self, system: impl Into<String>) -> Self {
         self.system = Some(system.into());
+        self
+    }
+
+    pub fn history(mut self, history: Vec<Turn>) -> Self {
+        self.history = history;
+        self
+    }
+
+    pub fn cache_system(mut self) -> Self {
+        self.cache_system = true;
         self
     }
 
