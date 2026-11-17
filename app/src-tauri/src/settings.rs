@@ -13,6 +13,8 @@ use providers::{
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
+use crate::library::LibraryState;
+
 pub struct AppState {
     pub(crate) store: SettingsStore,
     pub(crate) keys: SystemKeyStore,
@@ -152,12 +154,15 @@ pub fn get_settings(state: State<'_, AppState>) -> Result<SettingsView, UiError>
 #[tauri::command]
 pub fn save_profile(
     state: State<'_, AppState>,
+    library: State<'_, LibraryState>,
     input: ProfileInput,
     key: Option<String>,
 ) -> Result<SettingsView, UiError> {
     let profile = input.into_profile();
     let id = profile.id.clone();
     let view = state.update(|s| s.upsert_profile(profile))?;
+    // The search-by-meaning profile may have changed.
+    library.wake();
     if let Some(key) = key.filter(|k| !k.trim().is_empty()) {
         state.keys.set(&id, &key)?;
         // Re-read so `has_key` reflects the key just saved.
@@ -167,22 +172,32 @@ pub fn save_profile(
 }
 
 #[tauri::command]
-pub fn delete_profile(state: State<'_, AppState>, id: String) -> Result<SettingsView, UiError> {
+pub fn delete_profile(
+    state: State<'_, AppState>,
+    library: State<'_, LibraryState>,
+    id: String,
+) -> Result<SettingsView, UiError> {
     let view = state.update(|s| {
         s.remove_profile(&id);
         Ok(())
     })?;
     state.keys.delete(&id)?;
+    library.wake();
     Ok(view)
 }
 
 #[tauri::command]
 pub fn assign_role(
     state: State<'_, AppState>,
+    library: State<'_, LibraryState>,
     role: Role,
     profile_id: Option<String>,
 ) -> Result<SettingsView, UiError> {
-    state.update(|s| s.assign(role, profile_id.as_deref()))
+    let view = state.update(|s| s.assign(role, profile_id.as_deref()))?;
+    if role == Role::Embeddings {
+        library.wake();
+    }
+    Ok(view)
 }
 
 /// Builds a client from the form's current values, so a profile can be tested

@@ -3,6 +3,7 @@ use tauri::{Emitter, Manager};
 mod ask;
 mod devices;
 mod export;
+mod library;
 mod logging;
 mod meeting;
 mod meetings;
@@ -23,6 +24,11 @@ pub fn run() {
         .manage(meeting::MeetingState::default())
         .manage(meetings::Finalizing::default())
         .manage(ask::Asking::default())
+        .manage(library::LibraryState::default())
+        .setup(|app| {
+            library::start_worker(app.handle().clone());
+            Ok(())
+        })
         .on_window_event(|window, event| {
             // Closing the window would end the recording without its notes.
             if let tauri::WindowEvent::CloseRequested { api, .. } = event
@@ -55,6 +61,12 @@ pub fn run() {
             ask::chat_history,
             ask::ask_meeting,
             ask::clear_chat,
+            library::search_meetings,
+            library::library_chat,
+            library::ask_all_meetings,
+            library::clear_library_chat,
+            library::get_meaning_status,
+            library::retry_meaning,
             export::save_notes,
             notion::notion_status,
             notion::notion_connect,

@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
-/// The three jobs the app hands to AI providers. Each is assigned to one
-/// provider profile in settings.
+/// The jobs the app hands to AI providers. Each is assigned to one provider
+/// profile in settings. Embeddings is optional.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Role {
@@ -11,16 +11,24 @@ pub enum Role {
     Vision,
     /// Correcting terms, writing note sections and the final summary.
     Text,
+    /// Text to vectors, for finding meetings by meaning. Optional.
+    Embeddings,
 }
 
 impl Role {
-    pub const ALL: [Role; 3] = [Role::SpeechToText, Role::Vision, Role::Text];
+    pub const ALL: [Role; 4] = [
+        Role::SpeechToText,
+        Role::Vision,
+        Role::Text,
+        Role::Embeddings,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
             Role::SpeechToText => "Speech to text",
             Role::Vision => "Screen reading",
             Role::Text => "Text generation",
+            Role::Embeddings => "Search by meaning",
         }
     }
 }
@@ -33,8 +41,9 @@ impl std::str::FromStr for Role {
             "speech" | "speech_to_text" | "stt" => Ok(Role::SpeechToText),
             "vision" | "screen" => Ok(Role::Vision),
             "text" => Ok(Role::Text),
+            "embeddings" | "embedding" | "meaning" => Ok(Role::Embeddings),
             other => Err(format!(
-                "unknown role \"{other}\" (use speech, vision or text)"
+                "unknown role \"{other}\" (use speech, vision, text or embeddings)"
             )),
         }
     }
@@ -159,6 +168,14 @@ impl TextRequest {
 pub struct Usage {
     pub input_tokens: u64,
     pub output_tokens: u64,
+}
+
+/// Vectors for a list of texts, in the same order.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Embeddings {
+    pub vectors: Vec<Vec<f32>>,
+    pub model: String,
+    pub usage: Usage,
 }
 
 #[derive(Debug, Clone, Serialize)]

@@ -2,6 +2,14 @@
 //!
 //! Each meeting lives in its own folder (`meetings/meeting-<unix seconds>/`)
 //! holding `timeline.sqlite`, the recorded audio and, later, images and notes.
+//! The [`Library`] next to the meetings folder indexes all of them for search.
+
+mod library;
+
+pub use library::{
+    Chunk, ChunkVector, Hit, Library, LibraryChatRow, LibraryMeeting, MeetingRef, VectorProgress,
+    text_hash,
+};
 
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -444,16 +452,36 @@ const APP_DIR: &str = "Clio Notes";
 #[cfg(not(target_os = "macos"))]
 const APP_DIR: &str = "com.clionotes.app";
 
-/// The folder holding every meeting: `<data dir>/<APP_DIR>/meetings`,
-/// or `$CLIO_NOTES_DATA_DIR/meetings` when that is set.
-pub fn meetings_root() -> Result<PathBuf> {
-    let base = match std::env::var_os("CLIO_NOTES_DATA_DIR") {
+/// `<data dir>/<APP_DIR>`, or `$CLIO_NOTES_DATA_DIR` when that is set.
+fn data_dir() -> Result<PathBuf> {
+    Ok(match std::env::var_os("CLIO_NOTES_DATA_DIR") {
         Some(dir) => PathBuf::from(dir),
         None => dirs::data_dir()
             .ok_or_else(|| StorageError::Other("cannot find the app data folder".into()))?
             .join(APP_DIR),
+    })
+}
+
+/// The folder holding every meeting: `<data dir>/<APP_DIR>/meetings`,
+/// or `$CLIO_NOTES_DATA_DIR/meetings` when that is set.
+pub fn meetings_root() -> Result<PathBuf> {
+    Ok(data_dir()?.join("meetings"))
+}
+
+/// The [`Library`] file, next to the meetings folder.
+pub fn library_path() -> Result<PathBuf> {
+    Ok(data_dir()?.join("library.sqlite"))
+}
+
+/// Whether `name` is a meeting folder name: `meeting-<digits>` or
+/// `meeting-<digits>-<digits>`.
+pub fn is_meeting_id(name: &str) -> bool {
+    let Some(rest) = name.strip_prefix("meeting-") else {
+        return false;
     };
-    Ok(base.join("meetings"))
+    let mut parts = rest.splitn(2, '-');
+    let digits = |s: &str| !s.is_empty() && s.chars().all(|c| c.is_ascii_digit());
+    parts.next().is_some_and(digits) && parts.next().is_none_or(digits)
 }
 
 /// Creates a new, empty meeting folder under `root`.

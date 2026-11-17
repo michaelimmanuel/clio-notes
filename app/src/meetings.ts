@@ -1,12 +1,13 @@
-// The Meetings view: past meetings, their final notes, live notes and
-// transcript, and the actions on them (open folder, download, export to
-// Notion, rewrite final notes, move to the Recycle Bin), and the Ask bar.
+// The Meetings view: past meetings with a search over all of them, their
+// final notes, live notes and transcript, the actions on them (open folder,
+// download, export to Notion, rewrite final notes, move to the Recycle Bin),
+// and the Ask bar: across all meetings on the list, about one on its page.
 
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { save } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { askView, initAsk } from "./ask";
+import { ALL, askView, initAsk } from "./ask";
 import { $, errorText, h, toast } from "./dom";
 import { showView } from "./meeting";
 import { type MeetingUsage, usageLines } from "./usage";
@@ -65,6 +66,13 @@ type FinalEvent =
   | { type: "done"; id: string; title: string; note: string | null }
   | { type: "failed"; id: string; message: string };
 
+/** Mirrors SearchResult in crates/pipeline/src/library.rs. */
+interface SearchResult {
+  id: string;
+  hits: { kind: "notes" | "topic" | "section" | "screen" | "transcript"; start_ms: number; snippet: string }[];
+  matches: number;
+}
+
 // ---- State ----
 
 type Pane = "final" | "live" | "transcript";
@@ -81,6 +89,14 @@ let draft: FinalNotes | null = null;
 let saving = false;
 let busy = false;
 const images = new Map<string, string>();
+
+/** The search on the list, and the meetings that match it; `null` until the first answer. */
+let query = "";
+let results: Map<string, SearchResult> | null = null;
+let searchTimer: number | undefined;
+let searchSeq = 0;
+let searchBox: HTMLInputElement | null = null;
+let listBody: HTMLElement | null = null;
 
 const STATUS_LABEL: Record<Status, string> = {
   recording: "Recording",
@@ -148,25 +164,153 @@ function listView(): HTMLElement {
       "No meetings yet. Meetings you record appear here with their final notes.",
     );
   }
+  if (query) void runSearch();
+  paintList();
   return h(
     "div",
-    { class: "card meeting-list" },
-    ...items.map((m) =>
+    { class: "meeting-list-view" },
+    searchField(),
+    listBody,
+    askView(ALL, null, (id, ms) => void openAt(id, ms)),
+  );
+}
+
+function meetingRow(m: MeetingItem): HTMLElement {
+  return h(
+    "button",
+    { class: "meeting-row", type: "button", onclick: () => open(m.id) },
+    h(
+      "div",
+      { class: "meeting-row-main" },
+      h("div", { class: "meeting-row-title" }, m.title ?? "Untitled meeting"),
       h(
-        "button",
-        { class: "meeting-row", type: "button", onclick: () => open(m.id) },
-        h(
-          "div",
-          { class: "meeting-row-main" },
-          h("div", { class: "meeting-row-title" }, m.title ?? "Untitled meeting"),
-          h(
-            "div",
-            { class: "fineprint tight" },
-            `${when(m)} · ${duration(m.duration_ms)} · ${m.lines} lines · ${m.keyframes} screens`,
-          ),
-        ),
-        badge(m.status),
+        "div",
+        { class: "fineprint tight" },
+        `${when(m)} · ${duration(m.duration_ms)} · ${m.lines} lines · ${m.keyframes} screens`,
       ),
+    ),
+    badge(m.status),
+  );
+}
+
+// ---- Searching the list ----
+
+/** The search box, kept across repaints so typing is not interrupted. */
+function searchField(): HTMLElement {
+  if (!searchBox) {
+    searchBox = h("input", {
+      type: "search",
+      class: "meeting-search-input",
+      placeholder: "Search notes, screens and transcripts",
+      "aria-label": "Search meetings",
+      spellcheck: "false",
+      oninput: () => {
+        query = searchBox!.value.trim();
+        window.clearTimeout(searchTimer);
+        if (!query) {
+          searchSeq++;
+          results = null;
+          paintList();
+          return;
+        }
+        searchTimer = window.setTimeout(() => void runSearch(), 180);
+      },
+      onkeydown: (e: KeyboardEvent) => {
+        if (e.key === "Escape" && searchBox!.value) {
+          e.preventDefault();
+          e.stopPropagation();
+          searchBox!.value = "";
+          searchBox!.dispatchEvent(new Event("input"));
+        }
+      },
+    }) as HTMLInputElement;
+  }
+  return h("div", { class: "meeting-search" }, h("span", { class: "meeting-search-icon", "aria-hidden": "true" }, "⌕"), searchBox);
+}
+
+async function runSearch() {
+  const seq = ++searchSeq;
+  const q = query;
+  try {
+    const found = await invoke<SearchResult[]>("search_meetings", { query: q });
+    if (seq !== searchSeq) return;
+    results = new Map(found.map((r) => [r.id, r]));
+  } catch (e) {
+    if (seq !== searchSeq) return;
+    results = new Map();
+    toast(`Could not search: ${errorText(e)}`, true);
+  }
+  paintList();
+}
+
+/** The rows of the list: every meeting, or those matching the search. */
+function paintList() {
+  listBody ??= h("div", { class: "meeting-list-body" });
+  if (!query) {
+    listBody.replaceChildren(h("div", { class: "card meeting-list" }, ...items.map(meetingRow)));
+    return;
+  }
+  if (!results) {
+    listBody.replaceChildren(h("p", { class: "fineprint tight search-status" }, "Searching…"));
+    return;
+  }
+  const found = items.filter((m) => results!.has(m.id));
+  if (found.length === 0) {
+    listBody.replaceChildren(h("div", { class: "card empty" }, `No meetings match “${query}”.`));
+    return;
+  }
+  listBody.replaceChildren(
+    h("p", { class: "fineprint tight search-status" }, `${found.length} meeting${found.length === 1 ? "" : "s"} match “${query}”`),
+    h("div", { class: "card meeting-list" }, ...found.map((m) => resultRow(m, results!.get(m.id)!))),
+  );
+}
+
+const HIT_LABEL: Record<SearchResult["hits"][number]["kind"], string> = {
+  notes: "Notes",
+  topic: "Notes",
+  section: "Live notes",
+  screen: "Screen",
+  transcript: "",
+};
+
+/** A snippet with its matches marked; the index marks them with \u0001 and \u0002. */
+function snippetNodes(snippet: string): (Node | string)[] {
+  const out: (Node | string)[] = [];
+  for (const [i, part] of snippet.replace(/\s*\n\s*/g, " · ").split("\u0001").entries()) {
+    if (i === 0) {
+      out.push(part);
+      continue;
+    }
+    const [marked, rest = ""] = part.split("\u0002");
+    out.push(h("mark", {}, marked), rest);
+  }
+  return out;
+}
+
+function resultRow(m: MeetingItem, r: SearchResult): HTMLElement {
+  const more = r.matches - r.hits.length;
+  return h(
+    "div",
+    { class: "meeting-result" },
+    meetingRow(m),
+    h(
+      "div",
+      { class: "hits" },
+      ...r.hits.map((hit) => {
+        const timed = hit.kind !== "notes";
+        const label = [HIT_LABEL[hit.kind], timed ? clock(hit.start_ms) : ""].filter(Boolean).join(" · ");
+        const target: [number | null, Pane] =
+          hit.kind === "transcript" || hit.kind === "screen"
+            ? [hit.start_ms, "transcript"]
+            : [null, hit.kind === "section" ? "live" : "final"];
+        return h(
+          "button",
+          { class: "hit", type: "button", onclick: () => void openAt(m.id, ...target) },
+          h("span", { class: "hit-where mono" }, label),
+          h("span", { class: "hit-text" }, ...snippetNodes(hit.snippet)),
+        );
+      }),
+      more > 0 ? h("div", { class: "fineprint tight hit-more" }, `${more} more match${more === 1 ? "" : "es"} in this meeting`) : null,
     ),
   );
 }
@@ -293,7 +437,11 @@ function detailView(d: MeetingDetail): HTMLElement {
         : pane === "live"
           ? liveView(d)
           : transcriptView(d),
-    draft ? null : askView(m.id, m.status === "recording" ? "Stop the meeting to ask about it." : null, jumpTo),
+    draft
+      ? null
+      : askView(m.id, m.status === "recording" ? "Stop the meeting to ask about it." : null, (_id, ms) => {
+          if (ms !== null) jumpTo(ms);
+        }),
   );
 }
 
@@ -702,6 +850,17 @@ async function open(id: string) {
   window.scrollTo({ top: 0 });
 }
 
+/** Opens meeting `id` on `pane`, or at `ms` of its transcript when given. */
+async function openAt(id: string, ms: number | null, pane_: Pane = "final") {
+  await open(id);
+  if (openId !== id) return;
+  if (ms !== null) jumpTo(ms);
+  else if (pane_ !== pane) {
+    pane = pane_;
+    render();
+  }
+}
+
 async function close() {
   draft = null;
   confirmingRewrite = false;
@@ -874,6 +1033,14 @@ export async function initMeetings() {
   document.addEventListener("click", (e) => {
     for (const menu of document.querySelectorAll<HTMLDetailsElement>("details.menu[open]")) {
       if (!menu.contains(e.target as Node)) menu.open = false;
+    }
+  });
+  // Ctrl+F on the list goes to the search box.
+  document.addEventListener("keydown", (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "f" && !$("view-meetings").hidden && !openId && searchBox?.isConnected) {
+      e.preventDefault();
+      searchBox.focus();
+      searchBox.select();
     }
   });
   await listen<FinalEvent>("meeting-final", (e) => void onFinal(e.payload));

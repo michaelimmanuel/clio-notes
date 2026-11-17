@@ -15,9 +15,10 @@ use serde_json::{Value, json};
 use crate::error::{ProviderError, Result};
 use crate::http::{self, RetryPolicy};
 use crate::types::{
-    CheckResult, TextRequest, TextResponse, TranscribeRequest, Transcript, TranscriptSegment, Usage,
+    CheckResult, Embeddings, TextRequest, TextResponse, TranscribeRequest, Transcript,
+    TranscriptSegment, Usage,
 };
-use crate::{OnText, SpeechToText, TextGenerator};
+use crate::{Embedder, OnText, SpeechToText, TextGenerator};
 
 pub const DEFAULT_BASE_URL: &str = "https://api.openai.com/v1";
 /// OpenAI's current transcription model; the older ones (including
@@ -392,6 +393,101 @@ impl ChatStream {
     }
 }
 
+/// The vector length asked of `model`, for the models that can make
+/// shorter vectors than their default and search almost as well with them:
+/// OpenAI's third-generation models (1,536 or 3,072 numbers by default) and
+/// Google's Gemini embedding models (3,072). Other models make their own
+/// length.
+pub fn embedding_dimensions(model: &str) -> Option<u32> {
+    // OpenRouter puts the maker first, as in "google/gemini-embedding-2".
+    let name = model.rsplit_once('/').map_or(model, |(_, name)| name);
+    if name.starts_with("text-embedding-3") {
+        Some(512)
+    } else if name.starts_with("gemini-embedding") {
+        // Gemini is trained to work best at 768, 1,536 or 3,072.
+        Some(768)
+    } else {
+        None
+    }
+}
+
+impl OpenAiClient {
+    pub(crate) fn embeddings_body(&self, texts: &[String]) -> Value {
+        let mut body = json!({ "model": self.model, "input": texts });
+        if let Some(dimensions) = embedding_dimensions(&self.model) {
+            body["dimensions"] = json!(dimensions);
+        }
+        body
+    }
+}
+
+#[async_trait]
+impl Embedder for OpenAiClient {
+    async fn embed(&self, texts: &[String]) -> Result<Embeddings> {
+        if texts.is_empty() {
+            return Ok(Embeddings {
+                vectors: Vec::new(),
+                model: self.model.clone(),
+                usage: Usage::default(),
+            });
+        }
+        let body = self.embeddings_body(texts);
+        let v = http::send_json(self.retry, &self.model, || {
+            self.request(reqwest::Method::POST, "embeddings")
+                .json(&body)
+        })
+        .await?;
+        if let Some(message) = v["error"]["message"].as_str() {
+            return Err(ProviderError::invalid_response(message.to_string()));
+        }
+        parse_embeddings(&v, texts.len(), &self.model)
+    }
+}
+
+/// The vectors of an `/embeddings` response, put back in input order.
+fn parse_embeddings(v: &Value, count: usize, model: &str) -> Result<Embeddings> {
+    let data = v["data"].as_array().ok_or_else(|| {
+        ProviderError::invalid_response(format!("{model} returned no embeddings"))
+    })?;
+    let mut vectors: Vec<Option<Vec<f32>>> = vec![None; count];
+    for (i, item) in data.iter().enumerate() {
+        let index = item["index"].as_u64().map_or(i, |n| n as usize);
+        let vector: Option<Vec<f32>> = item["embedding"].as_array().map(|xs| {
+            xs.iter()
+                .filter_map(|x| x.as_f64())
+                .map(|x| x as f32)
+                .collect()
+        });
+        match (vectors.get_mut(index), vector) {
+            (Some(slot), Some(vector)) if !vector.is_empty() => *slot = Some(vector),
+            _ => {
+                return Err(ProviderError::invalid_response(format!(
+                    "{model} returned an embedding that cannot be read"
+                )));
+            }
+        }
+    }
+    let vectors: Vec<Vec<f32>> = vectors.into_iter().flatten().collect();
+    if vectors.len() != count {
+        return Err(ProviderError::invalid_response(format!(
+            "{model} returned {} embeddings for {count} texts",
+            vectors.len()
+        )));
+    }
+    let tokens = v["usage"]["prompt_tokens"]
+        .as_u64()
+        .or_else(|| v["usage"]["total_tokens"].as_u64())
+        .unwrap_or(0);
+    Ok(Embeddings {
+        vectors,
+        model: v["model"].as_str().unwrap_or(model).to_string(),
+        usage: Usage {
+            input_tokens: tokens,
+            output_tokens: 0,
+        },
+    })
+}
+
 #[async_trait]
 impl SpeechToText for OpenAiClient {
     async fn transcribe(&self, req: &TranscribeRequest) -> Result<Transcript> {
@@ -607,6 +703,68 @@ mod tests {
             .await;
         let e = client(&server, "m")
             .generate_streaming(&TextRequest::new("x"), &|_| {})
+            .await
+            .unwrap_err();
+        assert!(matches!(e, ProviderError::InvalidResponse { .. }), "{e:?}");
+    }
+
+    #[tokio::test]
+    async fn embeddings_come_back_in_input_order() {
+        let mut server = mockito::Server::new_async().await;
+        let m = server
+            .mock("POST", "/embeddings")
+            .match_body(Matcher::PartialJson(json!({
+                "model": "text-embedding-3-small",
+                "input": ["a", "b"],
+                "dimensions": 512,
+            })))
+            .with_body(
+                json!({
+                    "model": "text-embedding-3-small",
+                    "data": [
+                        {"index": 1, "embedding": [0.0, 1.0]},
+                        {"index": 0, "embedding": [1.0, 0.0]},
+                    ],
+                    "usage": {"prompt_tokens": 2, "total_tokens": 2}
+                })
+                .to_string(),
+            )
+            .create_async()
+            .await;
+        let e = client(&server, "text-embedding-3-small")
+            .embed(&["a".into(), "b".into()])
+            .await
+            .unwrap();
+        m.assert_async().await;
+        assert_eq!(e.vectors, [vec![1.0, 0.0], vec![0.0, 1.0]]);
+        assert_eq!(e.usage.input_tokens, 2);
+
+        // Gemini is asked for 768 numbers, also through OpenRouter; other
+        // models get no `dimensions`. A short answer is an error.
+        let body = |model: &str, router: bool| {
+            let c = if router {
+                OpenAiClient::openrouter(http::client(), None, "k".into(), model, None)
+            } else {
+                client(&server, model)
+            };
+            c.embeddings_body(&["a".into()]).get("dimensions").cloned()
+        };
+        assert_eq!(body("google/gemini-embedding-2", true), Some(json!(768)));
+        assert_eq!(body("gemini-embedding-2", false), Some(json!(768)));
+        assert_eq!(
+            body("openai/text-embedding-3-large", true),
+            Some(json!(512))
+        );
+        assert_eq!(body("nomic-embed-text", false), None);
+        assert_eq!(body("bge-m3", false), None);
+        let mut server = mockito::Server::new_async().await;
+        server
+            .mock("POST", "/embeddings")
+            .with_body(json!({"data": [{"index": 0, "embedding": [1.0]}]}).to_string())
+            .create_async()
+            .await;
+        let e = client(&server, "m")
+            .embed(&["a".into(), "b".into()])
             .await
             .unwrap_err();
         assert!(matches!(e, ProviderError::InvalidResponse { .. }), "{e:?}");

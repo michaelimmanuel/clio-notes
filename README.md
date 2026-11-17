@@ -23,6 +23,10 @@ choose.
 - **Ask about a meeting.** Ask "what did we decide about pricing?" or "what are my action
   items?" and get an answer from that meeting, with the times it comes from. Click a time to
   see that point of the transcript.
+- **Search and ask across meetings.** Search every meeting's notes, screens and transcript
+  from the meeting list, or ask "what did I agree to do this week?" and get an answer from all
+  your meetings, with links to the meetings and times it comes from. Optionally, search by
+  meaning also finds meetings that use other words for the same thing.
 - **Download or send to Notion.** Save a meeting's notes as Markdown or as a zip, or export
   them as a Notion page with their screenshots.
 - **Screens read, not just pictured.** Slide titles, text, tables, code and terms are read from
@@ -70,13 +74,15 @@ Wayland desktops.
 
 ## AI providers
 
-Clio Notes has three jobs, and each can use a different provider and model:
+Clio Notes has three jobs, and a fourth that is optional. Each can use a different provider and
+model:
 
 | Job | What it does | Providers |
 |---|---|---|
 | Speech to text | Turns the audio into a transcript | OpenAI, OpenRouter, Groq, a self-hosted Whisper server, or any OpenAI-compatible transcription endpoint |
 | Screen reading | Reads each new slide or screen | Any model that accepts images: Anthropic, OpenAI, OpenRouter, Gemini, Ollama and other OpenAI-compatible endpoints |
 | Notes writing | Writes the live sections and the final notes | Anthropic, OpenAI, OpenRouter, Gemini, Ollama and other OpenAI-compatible endpoints |
+| Search by meaning (optional) | Finds meetings by meaning when you ask across meetings | Any embedding model behind an OpenAI-compatible `/embeddings` endpoint: OpenAI, Gemini, Mistral, Voyage, Ollama. OpenRouter works where it offers the model. Not Anthropic, which has no embeddings API |
 
 One OpenRouter key can cover all three jobs. **Settings > Jobs** has a "Test connection" button
 for each provider and lists its models.
@@ -131,6 +137,67 @@ click elsewhere to close the answers; the bar shows how many there are, so you c
 A meeting's transcript of more than about six hours is shortened to fit: its start and end are
 kept, and the notes still cover the middle.
 
+## Searching and asking across meetings
+
+The **Meeting notes** list has a search box at the top (Ctrl+F) and an **Ask about all your
+meetings** bar at the bottom.
+
+**Search** finds the meetings that have every word you type somewhere in their notes, screens
+or transcript, and shows the best matching lines with the words marked. Click a line to open
+the meeting at that point. Search runs on your computer and sends nothing to a provider.
+
+**Ask** answers a question from all your meetings:
+
+1. The **Notes writing** model turns the question into search words, in English and
+   Indonesian, and a date range when the question names one ("last week", "in October").
+2. Your meetings are searched, and the notes of the best matches (up to 12) are sent with the
+   parts of their transcript and screens that matched. Other meetings in the date range are
+   listed by title.
+3. The answer cites each point with its meeting and time. Click one to open that meeting there.
+
+Answers are only as good as the search. Without search by meaning, a meeting that uses none of
+the search words is read only when nothing else matches, so name the topic, person or product
+in your question. A question takes two calls and sends up to about 50,000 tokens, a few times
+more than a question about one meeting.
+
+### Search by meaning (optional)
+
+Words alone miss a meeting that said "cost" when you asked about "pricing", or "postpone the
+launch" when you asked about delays. Search by meaning finds those too. It is off until you turn
+it on, and everything else works without it.
+
+To turn it on, add a profile with an embedding model under **Settings > Jobs**, such as
+`text-embedding-3-small` from OpenAI (the **OpenAI embeddings** preset), or `bge-m3` in Ollama
+on your own computer. Then choose that profile for **Search by meaning**.
+
+- **Indexing.** Clio Notes splits every meeting into pieces (notes, topics, screens and stretches
+  of transcript) and has the embedding model turn each into a vector that stands for its
+  meaning. This runs in the background, newest meetings first, and Settings shows how far it
+  is. New meetings are indexed when their notes are written. A piece is sent only once: when a
+  meeting changes, only its changed pieces are sent again.
+- **Asking.** Your question is turned into a vector too, and compared with every piece.
+  Pieces close in meaning and pieces that share the question's words are ranked together, so a
+  piece found both ways comes first. Meetings not indexed yet are still found by their words.
+- **Privacy.** Turning it on sends the text of every meeting (notes, screen text and
+  transcripts) to the embedding provider, which may be one that does not see your meetings
+  otherwise. With Ollama, nothing leaves your computer. The vectors are kept in
+  `library.sqlite`.
+- **Cost.** Indexing a one-hour meeting sends roughly 20,000 tokens, and each question adds a
+  few dozen. Embedding models cost a small fraction of what chat models do; check your
+  provider's price.
+- **Changing the model.** Vectors from different models cannot be compared, so choosing another
+  embedding model indexes every meeting again and drops the old vectors.
+- **Problems.** If the provider fails (a wrong key, no credit, a model name it does not
+  know), indexing stops, Settings shows why with a **Try again** button, and it is tried
+  again every 15 minutes. Questions keep working by words alone. A piece the provider
+  refuses, such as one that is too long, is skipped.
+- **Vector size.** OpenAI's `text-embedding-3` models are asked for vectors of 512 numbers
+  and Gemini's embedding models for 768, directly or through OpenRouter, which keeps
+  `library.sqlite` small and questions quick. Other models use their own size.
+
+Questions across meetings and their answers are kept in `library.sqlite` and deleted with
+**Clear chat**. The meeting being recorded is left out until it stops.
+
 ## Reliability
 
 - If a provider connection drops, recording continues. Calls are retried for up to 20 minutes,
@@ -158,9 +225,15 @@ new `.deb` from the Releases page. Version 0.1.0 has no updater, so update it by
 | Meetings | `%APPDATA%\com.clionotes.app\meetings` | `~/Library/Application Support/Clio Notes/meetings` | `~/.local/share/com.clionotes.app/meetings` |
 | Settings | `%APPDATA%\com.clionotes.app` | `~/Library/Application Support/Clio Notes` | `~/.config/com.clionotes.app` |
 | Logs | next to `meetings`, in `logs/` | same | same |
+| Search index | next to `meetings`, in `library.sqlite` | same | same |
 
 Logs hold counts, timings, device names, model names and errors only. Keys and meeting content
 are filtered out. Settings has a link to the log folder.
+
+`library.sqlite` holds a copy of every meeting's text for searching, the vectors for search by
+meaning when it is on, and the questions asked across meetings. The copy is updated when a
+meeting changes and dropped when it is deleted. If you delete the file, the search index is
+rebuilt and the vectors are made again; only the questions are lost.
 
 Each meeting folder holds:
 

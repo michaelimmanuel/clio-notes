@@ -473,7 +473,9 @@ pub async fn start_meeting(
         let usage = |links: &[Arc<Link>]| {
             let mut usage = MeetingUsage::default();
             for link in links {
-                *usage.role_mut(link.role()) = link.usage();
+                if let Some(slot) = usage.role_mut(link.role()) {
+                    *slot = link.usage();
+                }
             }
             usage
         };

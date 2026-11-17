@@ -14,6 +14,7 @@
 pub mod ask;
 pub mod final_pass;
 pub mod language;
+pub mod library;
 pub mod notes;
 pub mod recover;
 pub mod resample;

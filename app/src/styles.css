@@ -854,6 +854,28 @@ section > .row-between:first-child {
   color: var(--warn);
 }
 
+.role-desc + .role-desc {
+  margin-top: 4px;
+}
+
+.role-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.role-status.ok {
+  color: var(--ok);
+}
+
+.role-status.err {
+  color: var(--err);
+}
+
 /* Profiles */
 
 .profiles {
@@ -1702,9 +1724,118 @@ textarea {
   }
 }
 
-/* Ask: a bar floating at the bottom of a meeting's page */
+/* Search on the Meeting notes list */
 
-.meeting-detail {
+.meeting-list-view {
+  display: grid;
+  gap: 12px;
+}
+
+.meeting-search {
+  position: relative;
+}
+
+.meeting-search-icon {
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  transform: translateY(-52%);
+  color: var(--faint);
+  font-size: 17px;
+  line-height: 1;
+  pointer-events: none;
+}
+
+.meeting-search .meeting-search-input {
+  min-height: 40px;
+  padding-left: 34px;
+  border-radius: 10px;
+}
+
+.meeting-list-body {
+  display: grid;
+  gap: 8px;
+}
+
+.search-status {
+  padding: 0 4px;
+}
+
+.meeting-result + .meeting-result {
+  border-top: 1px solid var(--border);
+}
+
+.meeting-result .meeting-row {
+  width: 100%;
+  padding-bottom: 6px;
+}
+
+.hits {
+  display: grid;
+  gap: 1px;
+  padding: 0 12px 12px;
+}
+
+.hit {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--ease);
+}
+
+.hit:hover {
+  background: var(--surface-2);
+}
+
+.hit:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.hit-where {
+  flex: none;
+  min-width: 86px;
+  color: var(--faint);
+  font-size: 11.5px;
+}
+
+.hit-text {
+  min-width: 0;
+  color: var(--muted);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.hit-text mark {
+  background: var(--accent-soft);
+  color: var(--text);
+  font-weight: 600;
+  border-radius: 3px;
+  padding: 0 2px;
+}
+
+.hit-more {
+  padding: 2px 8px 0;
+  color: var(--faint);
+}
+
+/* Ask: a bar floating at the bottom of the page */
+
+.meeting-detail,
+.meeting-list-view {
   padding-bottom: 88px;
 }
 
@@ -1922,6 +2053,13 @@ body:has(#view-meetings:not([hidden]) .ask-dock) .toast {
 
 .time-chip:hover {
   border-color: var(--accent);
+}
+
+.time-chip.meeting-chip {
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  padding: 0 8px;
 }
 
 .time-chip:focus-visible {

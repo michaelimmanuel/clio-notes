@@ -86,11 +86,12 @@ impl Profile {
         }
     }
 
-    /// Whether this profile can be assigned to `role`. Anthropic's API does
-    /// not transcribe audio; OpenAI-compatible endpoints and OpenRouter may do
-    /// anything, depending on the model.
+    /// Whether this profile can be assigned to `role`. Anthropic's API
+    /// neither transcribes audio nor makes embeddings; OpenAI-compatible
+    /// endpoints and OpenRouter may do anything, depending on the model.
     pub fn supports(&self, role: Role) -> bool {
-        !(self.kind == ProviderKind::Anthropic && role == Role::SpeechToText)
+        !(self.kind == ProviderKind::Anthropic
+            && matches!(role, Role::SpeechToText | Role::Embeddings))
     }
 
     pub fn base_url(&self) -> &str {
@@ -143,6 +144,9 @@ pub struct RoleAssignments {
     pub vision: Option<String>,
     #[serde(default)]
     pub text: Option<String>,
+    /// Optional: unassigned, meetings are searched by their words only.
+    #[serde(default)]
+    pub embeddings: Option<String>,
 }
 
 impl RoleAssignments {
@@ -151,6 +155,7 @@ impl RoleAssignments {
             Role::SpeechToText => self.speech_to_text.as_deref(),
             Role::Vision => self.vision.as_deref(),
             Role::Text => self.text.as_deref(),
+            Role::Embeddings => self.embeddings.as_deref(),
         }
     }
 
@@ -159,6 +164,7 @@ impl RoleAssignments {
             Role::SpeechToText => &mut self.speech_to_text,
             Role::Vision => &mut self.vision,
             Role::Text => &mut self.text,
+            Role::Embeddings => &mut self.embeddings,
         }
     }
 }
@@ -349,6 +355,7 @@ mod tests {
         let id = claude.id.clone();
         let mut s = settings_with(vec![claude]);
         assert!(s.assign(Role::SpeechToText, Some(&id)).is_err());
+        assert!(s.assign(Role::Embeddings, Some(&id)).is_err());
         s.assign(Role::Vision, Some(&id)).unwrap();
         assert_eq!(s.assigned(Role::Vision).unwrap().name, "Claude");
     }
@@ -373,6 +380,13 @@ mod tests {
         s.upsert_profile(p).unwrap();
         assert!(s.assigned(Role::SpeechToText).is_none());
         assert!(s.assigned(Role::Text).is_some());
+    }
+
+    #[test]
+    fn settings_without_embeddings_still_load() {
+        let s: Settings =
+            serde_json::from_str(r#"{"version":1,"profiles":[],"roles":{"text":null}}"#).unwrap();
+        assert_eq!(s.roles.embeddings, None);
     }
 
     #[test]

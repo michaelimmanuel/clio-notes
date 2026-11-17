@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { $, errorText, h, toast } from "./dom";
 import { initDevices } from "./devices";
 import { initMeeting, showView } from "./meeting";
@@ -10,7 +11,7 @@ import { initNotion } from "./notion";
 // ---- Types mirrored from app/src-tauri/src/settings.rs ----
 
 type Kind = "anthropic" | "openai_compatible" | "openrouter";
-type Role = "speech_to_text" | "vision" | "text";
+type Role = "speech_to_text" | "vision" | "text" | "embeddings";
 
 interface Profile {
   id: string;
@@ -46,7 +47,15 @@ interface CheckResult {
   display_name?: string | null;
 }
 
-const ROLES: { id: Role; name: string; desc: string }[] = [
+/** Mirrors MeaningStatus in app/src-tauri/src/library.rs. */
+interface MeaningStatus {
+  state: "off" | "indexing" | "ready" | "error";
+  model: string | null;
+  progress: { meetings: number; meetings_done: number; pieces: number; pieces_done: number };
+  error: string | null;
+}
+
+const ROLES: { id: Role; name: string; desc: string; optional?: boolean }[] = [
   {
     id: "speech_to_text",
     name: "Speech to text",
@@ -61,6 +70,14 @@ const ROLES: { id: Role; name: string; desc: string }[] = [
     id: "text",
     name: "Text generation",
     desc: "Fixes terms in the transcript, writes the notes and the final summary.",
+  },
+  {
+    id: "embeddings",
+    name: "Search by meaning",
+    optional: true,
+    desc:
+      "Optional. When you ask about all your meetings, also finds the ones that use other words for the same thing. " +
+      "Needs an embedding model, such as text-embedding-3-small from OpenAI, or bge-m3 in Ollama on your own computer.",
   },
 ];
 
@@ -88,6 +105,12 @@ const PRESETS: Preset[] = [
   { label: "Anthropic", name: "Claude", kind: "anthropic", model: "claude-opus-5-5" },
   { label: "OpenAI speech", name: "OpenAI speech", kind: "openai_compatible", model: "gpt-transcribe" },
   { label: "OpenAI chat", name: "OpenAI", kind: "openai_compatible", model: "" },
+  {
+    label: "OpenAI embeddings",
+    name: "OpenAI embeddings",
+    kind: "openai_compatible",
+    model: "text-embedding-3-small",
+  },
   { label: "OpenRouter", name: "OpenRouter", kind: "openrouter", model: "" },
   {
     label: "Ollama (local)",
@@ -100,7 +123,12 @@ const PRESETS: Preset[] = [
 
 // ---- State ----
 
-let settings: SettingsView = { profiles: [], roles: { speech_to_text: null, vision: null, text: null }, path: "" };
+let settings: SettingsView = {
+  profiles: [],
+  roles: { speech_to_text: null, vision: null, text: null, embeddings: null },
+  path: "",
+};
+let meaning: MeaningStatus | null = null;
 /** Test results shown under each profile card, by profile id. */
 const results = new Map<string, Result>();
 /** Profile whose delete button has been pressed once. */
@@ -110,8 +138,11 @@ let formOpen = false;
 type Result = { state: "ok" | "err" | "pending"; text: string };
 
 function supports(p: { kind: Kind }, role: Role): boolean {
-  return !(p.kind === "anthropic" && role === "speech_to_text");
+  return !(p.kind === "anthropic" && (role === "speech_to_text" || role === "embeddings"));
 }
+
+/** Embedding models, which can only do search by meaning. */
+const EMBEDDING_MODEL = /embed|bge-|e5-|gte-|voyage/i;
 
 function toInput(p: Profile): ProfileInput {
   return {
@@ -145,8 +176,13 @@ function renderRoles() {
   const container = $("roles");
   container.replaceChildren(
     ...ROLES.map((role) => {
-      const candidates = settings.profiles.filter((p) => supports(p, role.id));
       const current = settings.roles[role.id];
+      // Embedding models only do search by meaning, and only they do it.
+      const candidates = settings.profiles.filter(
+        (p) =>
+          supports(p, role.id) &&
+          (p.id === current || EMBEDDING_MODEL.test(p.model) === (role.id === "embeddings")),
+      );
       const assigned = settings.profiles.find((p) => p.id === current);
 
       const select = h(
@@ -156,7 +192,11 @@ function renderRoles() {
           disabled: candidates.length === 0,
           onchange: (e: Event) => assignRole(role.id, (e.target as HTMLSelectElement).value || null),
         },
-        h("option", { value: "" }, candidates.length ? "Not assigned" : "No suitable profile yet"),
+        h(
+          "option",
+          { value: "" },
+          role.optional ? "Off" : candidates.length ? "Not assigned" : "No suitable profile yet",
+        ),
         ...candidates.map((p) => h("option", { value: p.id, selected: p.id === current }, `${p.name} · ${p.model}`)),
       );
 
@@ -173,11 +213,58 @@ function renderRoles() {
           {},
           h("div", { class: "role-name" }, role.name),
           h("div", { class: "role-desc" }, role.desc),
+          role.id === "embeddings" && assigned
+            ? h(
+                "div",
+                { class: "role-desc" },
+                `The text of every meeting (notes, screens and transcripts) is sent to ${assigned.name} to be indexed, ` +
+                  "and each question you ask across meetings.",
+              )
+            : null,
           warning ? h("div", { class: "role-warn" }, warning) : null,
+          role.id === "embeddings" ? meaningLine() : null,
         ),
         select,
       );
     }),
+  );
+}
+
+/** How search by meaning is doing, under its job. */
+function meaningLine(): HTMLElement | null {
+  const m = meaning;
+  if (!m || m.state === "off" || !settings.roles.embeddings) return null;
+  const { meetings, meetings_done } = m.progress;
+  if (m.state === "error") {
+    return h(
+      "div",
+      { class: "role-status err" },
+      `Stopped: ${m.error ?? "unknown error"} `,
+      h(
+        "button",
+        {
+          class: "btn small",
+          type: "button",
+          onclick: () => invoke("retry_meaning").catch((e) => toast(errorText(e), true)),
+        },
+        "Try again",
+      ),
+    );
+  }
+  if (m.state === "indexing") {
+    return h(
+      "div",
+      { class: "role-status" },
+      h("span", { class: "dots" }),
+      `Indexing by meaning: ${meetings_done} of ${meetings} meeting${meetings === 1 ? "" : "s"} done`,
+    );
+  }
+  return h(
+    "div",
+    { class: "role-status ok" },
+    meetings === 0
+      ? "Ready. Meetings are indexed by meaning as you record them."
+      : `Ready: ${meetings === 1 ? "your meeting is" : `all ${meetings} meetings are`} indexed by meaning.`,
   );
 }
 
@@ -507,6 +594,9 @@ function closeForm() {
 
 /** Fills empty roles with a newly added profile, so a first setup needs no extra clicks. */
 async function autoAssign(p: Profile) {
+  // Search by meaning sends every meeting to the provider, so it is only
+  // turned on by choosing it under Jobs.
+  if (EMBEDDING_MODEL.test(p.model)) return;
   const isSpeechModel = /transcribe|whisper/i.test(p.model);
   const targets: Role[] = isSpeechModel ? ["speech_to_text"] : ["vision", "text"];
   for (const role of targets) {
@@ -562,6 +652,15 @@ window.addEventListener("DOMContentLoaded", async () => {
   initUpdates().catch(() => {
     // Updates are optional; the app works without them.
   });
+  try {
+    meaning = await invoke<MeaningStatus>("get_meaning_status");
+    await listen<MeaningStatus>("meaning-status", (e) => {
+      meaning = e.payload;
+      renderRoles();
+    });
+  } catch {
+    // Settings works without the status line.
+  }
   try {
     settings = await invoke<SettingsView>("get_settings");
     render();

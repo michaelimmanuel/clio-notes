@@ -111,7 +111,7 @@ fn source_note(source: Source) -> &'static str {
     }
 }
 
-fn notes_text(n: &FinalNotes) -> String {
+pub(crate) fn notes_text(n: &FinalNotes) -> String {
     let mut t = format!("## Notes\n\nTitle: {}\n", n.title);
     if !n.summary.is_empty() {
         t.push_str(&format!("Summary: {}\n", n.summary));
@@ -148,7 +148,7 @@ fn notes_text(n: &FinalNotes) -> String {
 }
 
 /// The notes written during the meeting, for a meeting without final notes.
-fn live_notes_text(input: &MeetingInput) -> String {
+pub(crate) fn live_notes_text(input: &MeetingInput) -> String {
     let mut t = String::from("## Notes (written live; the final notes are not done)\n");
     if input.sections.is_empty() {
         t.push_str("\n(none)\n");
@@ -177,6 +177,13 @@ fn screens_text(readings: &[(u64, Option<ScreenReading>)], full: bool) -> String
     if readings.is_empty() {
         t.push_str("(none)\n");
     }
+    t.push_str(&screen_lines(readings, full));
+    t
+}
+
+/// One line per screen with its time, and with `full` the text read from it.
+pub(crate) fn screen_lines(readings: &[(u64, Option<ScreenReading>)], full: bool) -> String {
+    let mut t = String::new();
     for (t_ms, reading) in readings {
         let Some(r) = reading else {
             t.push_str(&format!("[{}] (not read)\n", clock(*t_ms)));
@@ -216,7 +223,7 @@ fn screens_text(readings: &[(u64, Option<ScreenReading>)], full: bool) -> String
     t
 }
 
-fn cut(text: &str, max: usize) -> String {
+pub(crate) fn cut(text: &str, max: usize) -> String {
     match text.char_indices().nth(max) {
         Some((i, _)) => format!("{}…", &text[..i]),
         None => text.to_string(),
@@ -328,7 +335,7 @@ pub async fn ask(
     })
 }
 
-fn now_unix_ms() -> u64 {
+pub(crate) fn now_unix_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()

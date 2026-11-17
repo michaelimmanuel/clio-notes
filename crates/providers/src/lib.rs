@@ -1,10 +1,10 @@
 //! The bring-your-own-key provider layer.
 //!
-//! The rest of the app sees two traits, [`SpeechToText`] and
-//! [`TextGenerator`], and three [`Role`]s. Screen reading (the `Vision` role)
+//! The rest of the app sees three traits, [`SpeechToText`], [`TextGenerator`]
+//! and [`Embedder`], and four [`Role`]s. Screen reading (the `Vision` role)
 //! is a `TextGenerator` call with images attached, assigned to a profile whose
-//! model accepts images. Which provider sits behind each role comes from the
-//! user's [`Settings`].
+//! model accepts images. The `Embeddings` role is optional. Which provider
+//! sits behind each role comes from the user's [`Settings`].
 
 pub mod anthropic;
 pub mod error;
@@ -53,6 +53,12 @@ pub trait TextGenerator: Send + Sync {
 #[async_trait]
 pub trait SpeechToText: Send + Sync {
     async fn transcribe(&self, request: &TranscribeRequest) -> Result<Transcript>;
+}
+
+#[async_trait]
+pub trait Embedder: Send + Sync {
+    /// One vector per text, in order.
+    async fn embed(&self, texts: &[String]) -> Result<Embeddings>;
 }
 
 /// A ready-to-use client for one profile.
@@ -135,6 +141,13 @@ impl ProviderClient {
             Self::OpenAi(c) => Some(Arc::new(c)),
         }
     }
+
+    pub fn into_embedder(self) -> Option<Arc<dyn Embedder>> {
+        match self {
+            Self::Anthropic(_) => None,
+            Self::OpenAi(c) => Some(Arc::new(c)),
+        }
+    }
 }
 
 fn assigned_client(
@@ -158,9 +171,9 @@ pub fn text_generator(
     keys: &dyn KeyStore,
     http: &reqwest::Client,
 ) -> Result<Arc<dyn TextGenerator>> {
-    if role == Role::SpeechToText {
+    if matches!(role, Role::SpeechToText | Role::Embeddings) {
         return Err(ProviderError::Config {
-            detail: "Speech to text is not a text generation role.".into(),
+            detail: format!("{} is not a text generation role.", role.label()),
         });
     }
     Ok(assigned_client(settings, role, keys, http)?.into_text_generator())

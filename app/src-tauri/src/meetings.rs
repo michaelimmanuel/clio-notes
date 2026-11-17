@@ -128,12 +128,7 @@ fn root() -> Result<PathBuf, UiError> {
 }
 
 fn valid_id(id: &str) -> bool {
-    let Some(rest) = id.strip_prefix("meeting-") else {
-        return false;
-    };
-    let mut parts = rest.splitn(2, '-');
-    let digits = |s: &str| !s.is_empty() && s.chars().all(|c| c.is_ascii_digit());
-    parts.next().is_some_and(digits) && parts.next().is_none_or(digits)
+    storage::is_meeting_id(id)
 }
 
 /// The folder of meeting `id`, which must exist.
@@ -415,6 +410,8 @@ pub async fn run_final_pass(
         u.final_pass.add(&final_link.usage());
     });
     app.state::<Finalizing>().0.lock().unwrap().remove(&id);
+    // The new notes go into the search index, and their vectors made.
+    app.state::<crate::library::LibraryState>().wake();
     let result = result.map(|(mut notes, usage)| {
         if let Some(e) = tail_error {
             let note = format!(
@@ -612,7 +609,15 @@ pub fn delete_meeting(app: AppHandle, id: String) -> Result<(), UiError> {
             "delete",
             format!("Could not move the meeting to the Recycle Bin: {e}"),
         )
-    })
+    })?;
+    // Its text leaves the search index now rather than at the next search.
+    if let Ok(path) = storage::library_path()
+        && let Ok(mut library) = storage::Library::open(&path)
+        && let Err(e) = library.remove_meeting(&id)
+    {
+        log::warn!(target: "clio::library", "Meeting {id}: could not remove it from the search index: {e}");
+    }
+    Ok(())
 }
 
 #[cfg(test)]

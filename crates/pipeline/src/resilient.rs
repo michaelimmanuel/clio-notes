@@ -71,11 +71,14 @@ pub struct MeetingUsage {
 }
 
 impl MeetingUsage {
-    pub fn role_mut(&mut self, role: Role) -> &mut RoleUsage {
+    /// The usage of `role`; `None` for embeddings, which are made for the
+    /// search index rather than for one meeting.
+    pub fn role_mut(&mut self, role: Role) -> Option<&mut RoleUsage> {
         match role {
-            Role::SpeechToText => &mut self.speech_to_text,
-            Role::Vision => &mut self.vision,
-            Role::Text => &mut self.text,
+            Role::SpeechToText => Some(&mut self.speech_to_text),
+            Role::Vision => Some(&mut self.vision),
+            Role::Text => Some(&mut self.text),
+            Role::Embeddings => None,
         }
     }
 }
