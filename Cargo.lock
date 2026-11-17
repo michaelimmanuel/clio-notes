@@ -604,7 +604,7 @@ dependencies = [
 
 [[package]]
 name = "capture"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -817,7 +817,7 @@ checksum = "1c133bc6a41be0d194c306b5506d15e6feeea7b1d6604bd3f8310dfb2ca96486"
 
 [[package]]
 name = "clio-notes"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "capture",
  "log",
@@ -3905,7 +3905,7 @@ checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 
 [[package]]
 name = "pipeline"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -4120,7 +4120,7 @@ dependencies = [
 
 [[package]]
 name = "providers"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -4385,7 +4385,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "replay"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "clap",
  "hound",
@@ -5174,7 +5174,7 @@ checksum = "ff7589a1859b09232522bb9edf076ca7fcf14ded96685d3fa629db73023ffbb7"
 
 [[package]]
 name = "storage"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "dirs",
  "rusqlite",
