@@ -16,6 +16,7 @@ pub mod final_pass;
 pub mod language;
 pub mod library;
 pub mod notes;
+pub mod recording;
 pub mod recover;
 pub mod resample;
 pub mod resilient;

@@ -604,6 +604,15 @@ pub fn delete_meeting(app: AppHandle, id: String) -> Result<(), UiError> {
             "Wait until the final notes are written.",
         ));
     }
+    if app
+        .state::<crate::recordings::RecordingsState>()
+        .is_busy(&id)
+    {
+        return Err(UiError::new(
+            "busy",
+            "This meeting's recording is being compressed. Try again in a minute.",
+        ));
+    }
     trash::delete(&dir).map_err(|e| {
         UiError::new(
             "delete",

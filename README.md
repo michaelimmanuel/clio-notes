@@ -244,10 +244,16 @@ meeting-<date and time>/
   transcript.md     the full transcript, with screen changes marked
   images/           the screenshots used in notes.md
   keyframes/        every screen change captured
-  mic.wav           your microphone
-  system.wav        the computer's sound
+  mic.opus          your microphone
+  system.opus       the computer's sound
   timeline.sqlite   everything above, with timings, for rewriting the notes
 ```
+
+While a meeting is recorded, its sound is saved as `mic.wav` and `system.wav`, which survive a
+crash. Once it stops, they are compressed in the background to `mic.opus` and `system.opus`:
+about 30 MB per hour of meeting instead of about 700 MB, with speech as clear as before. Each
+WAV is deleted only after its compressed file is written and checked; if compressing fails, the
+WAV is kept and tried again later. Opus files play in VLC, web browsers and most audio players.
 
 ## Languages
 

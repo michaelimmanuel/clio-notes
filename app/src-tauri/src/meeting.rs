@@ -594,6 +594,10 @@ pub async fn start_meeting(
         let meetings = finished_app.state::<MeetingState>();
         meetings.running.lock().unwrap().take();
         let _ = finished_app.emit("meeting-finished", &summary);
+        // The WAVs are complete; they can be compressed.
+        finished_app
+            .state::<crate::recordings::RecordingsState>()
+            .wake();
         // Errors are reported to the UI by `meeting-final`.
         let _ = crate::meetings::run_final_pass(&finished_app, &final_dir, final_writer).await;
     });

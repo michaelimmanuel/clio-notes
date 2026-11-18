@@ -8,6 +8,7 @@ mod logging;
 mod meeting;
 mod meetings;
 mod notion;
+mod recordings;
 mod settings;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -25,8 +26,10 @@ pub fn run() {
         .manage(meetings::Finalizing::default())
         .manage(ask::Asking::default())
         .manage(library::LibraryState::default())
+        .manage(recordings::RecordingsState::default())
         .setup(|app| {
             library::start_worker(app.handle().clone());
+            recordings::start_worker(app.handle().clone());
             Ok(())
         })
         .on_window_event(|window, event| {
